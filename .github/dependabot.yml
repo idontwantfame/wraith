@@ -1,0 +1,10 @@
+# Keeps the SHA-pinned GitHub Actions (workflows and the composite build
+# action) up to date with reviewable pull requests.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/build
+    schedule:
+      interval: weekly

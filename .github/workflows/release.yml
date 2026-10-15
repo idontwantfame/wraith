@@ -1,8 +1,8 @@
 name: Release
 
-# Push a tag like v1.2.0 (or v1.2.0-rc.1 for a pre-release) to build, sign and
-# publish a GitHub release. Running it by hand builds and packages without
-# publishing (a dry run; the package is kept as a workflow artifact).
+# Push a tag like v1.2.0 (or v1.2.0-rc.1 for a pre-release) on a commit in main
+# to build, sign and publish a GitHub release. Running it by hand builds and
+# packages without publishing (a dry run; the package is kept as an artifact).
 on:
   push:
     tags: ["v*"]
@@ -22,7 +22,7 @@ jobs:
     outputs:
       build: ${{ steps.package.outputs.build }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0 # the changelog needs the history and tags
           persist-credentials: false
@@ -34,8 +34,14 @@ jobs:
             echo "::error::Release tags look like v1.2.3 or v1.2.3-rc.1 (got '$GITHUB_REF_NAME')"
             exit 1
           fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Release tags must point at a commit on main"
+            exit 1
+          fi
 
       - uses: ./.github/actions/build
+        with:
+          cache: "false" # build what gets signed from fresh downloads
 
       - name: Package
         id: package
@@ -50,65 +56,91 @@ jobs:
           { echo; git cliff "$range" --strip header; } >> release/notes.md
           cat release/notes.md >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release
           path: release/
           if-no-files-found: error
           retention-days: 30
 
-  # The only job with the signing key. It runs no third-party code: first-party
-  # actions, tools/ota/sign.sh (openssl) and the GitHub CLI.
+  # The only job with the signing key, which lives in the protected "release"
+  # environment (see README → Releases). It runs no third-party code beyond
+  # pinned first-party actions: our own scripts, openssl and the GitHub CLI.
   publish:
     name: Sign and publish
     needs: build
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
+    environment: release
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release
           path: release
 
-      - name: Sign the firmware and the checksums
+      # Everything is checked against the public key in the checked-out source
+      # (src/ota_signing.h), not the build's copy: the secret must be its
+      # private half, and the firmware must embed it, or nothing is signed.
+      # The key file exists only during this step.
+      - name: Check and sign
         env:
           OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
         run: |
-          if [ -z "$OTA_SIGNING_KEY" ]; then
-            echo "::error::The OTA_SIGNING_KEY secret is not set; refusing to publish an unsigned release"
+          set -euo pipefail
+          if [ -z "${OTA_SIGNING_KEY:-}" ]; then
+            echo "::error::No OTA_SIGNING_KEY secret in the 'release' environment; refusing to publish an unsigned release"
             exit 1
           fi
-          (umask 077 && printf '%s\n' "$OTA_SIGNING_KEY" > tools/ota/ota_private_key.pem)
+          key="$PWD/tools/ota/ota_private_key.pem"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$OTA_SIGNING_KEY" > "$key")
+          unset OTA_SIGNING_KEY
+
+          trusted="$RUNNER_TEMP/trusted_public_key.pem"
+          python3 tools/release/signing_key.py public-key > "$trusted"
+          if ! cmp -s <(openssl pkey -in "$key" -pubout) <(openssl pkey -pubin -in "$trusted" -pubout); then
+            echo "::error::OTA_SIGNING_KEY is not the private half of the key in src/ota_signing.h"
+            exit 1
+          fi
+          python3 tools/release/signing_key.py check-firmware release/assets/wraith-*-firmware.bin
+          if ! cmp -s <(openssl pkey -pubin -in release/assets/ota_public_key.pem -pubout) \
+                      <(openssl pkey -pubin -in "$trusted" -pubout); then
+            echo "::error::The packaged ota_public_key.pem is not the key in src/ota_signing.h"
+            exit 1
+          fi
+
           cd release/assets
           ../../tools/ota/sign.sh wraith-*-firmware.bin
           sha256sum -- * > SHA256SUMS
           ../../tools/ota/sign.sh SHA256SUMS
 
-      - name: Remove the key
-        if: always()
-        run: rm -f tools/ota/ota_private_key.pem
-
-      # Catches a secret that doesn't match the key compiled into the firmware:
-      # devices would reject every update signed with it.
-      - name: Verify the signatures against the firmware's public key
+      - name: Verify the signatures and checksums
         run: |
+          trusted="$RUNNER_TEMP/trusted_public_key.pem"
+          python3 tools/release/signing_key.py public-key > "$trusted"
           cd release/assets
           for file in wraith-*-firmware.bin SHA256SUMS; do
             openssl base64 -d -A -in "$file.sig" -out "$RUNNER_TEMP/signature"
-            openssl dgst -sha256 -verify ota_public_key.pem -signature "$RUNNER_TEMP/signature" "$file"
+            openssl dgst -sha256 -verify "$trusted" -signature "$RUNNER_TEMP/signature" "$file"
           done
+          sha256sum -c SHA256SUMS
 
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           BUILD: ${{ needs.build.outputs.build }}
         run: |
+          tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::$GITHUB_REF_NAME moved to $tagged after this build ($GITHUB_SHA); not publishing"
+            exit 1
+          fi
           prerelease=()
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" release/assets/* \

@@ -131,22 +131,35 @@ Without the file you can still build and flash over USB; signing is skipped.
 
 ## Releases
 
-Pushing a tag `vX.Y.Z` (`vX.Y.Z-rc.N` for a pre-release) runs the
-[release workflow](.github/workflows/release.yml):
+Pushing a tag `vX.Y.Z` (`vX.Y.Z-rc.N` for a pre-release) on a commit in
+`main` runs the [release workflow](.github/workflows/release.yml). Tag with a
+message: `git tag -a v1.0.0 -m v1.0.0 && git push origin v1.0.0`.
 
-1. Runs the tests and builds the firmware and the web UI image (no secrets).
+1. Runs the tests and builds the firmware and the web UI image from fresh
+   downloads (no cache, no secrets).
 2. Packages the factory, firmware and web UI images and the public key, and
    writes the release notes: install instructions plus a changelog from the
    commit messages since the previous tag ([git-cliff](https://git-cliff.org),
    `cliff.toml`).
-3. In a separate job holding the key, signs the firmware and a `SHA256SUMS`
-   file, verifies both signatures against the key in the firmware, and
-   publishes the GitHub release.
+3. In a separate job that alone can read the key, checks that the key matches
+   `src/ota_signing.h` and that the firmware embeds it, signs the firmware and a
+   `SHA256SUMS` file, verifies both, and publishes the GitHub release.
 
-One-time setup: add the private key as a repository secret named
-`OTA_SIGNING_KEY` (Settings → Secrets and variables → Actions, or
-`gh secret set OTA_SIGNING_KEY < tools/ota/ota_private_key.pem`). Running the
-workflow by hand is a dry run: it builds and packages without publishing.
+One-time setup on GitHub, so that only release tags can reach the key:
+
+1. Settings → Environments → **New environment** `release`. Under deployment
+   branches and tags, allow only tags matching `v*`. Optionally add yourself as
+   a required reviewer, so every release waits for your approval.
+2. In that environment, add the secret `OTA_SIGNING_KEY` with the contents of
+   `tools/ota/ota_private_key.pem` (or
+   `gh secret set OTA_SIGNING_KEY --env release < tools/ota/ota_private_key.pem`).
+   Make it an environment secret, not a repository secret: a repository secret
+   is readable from any branch.
+3. Settings → Rules → Rulesets: a tag ruleset for `v*` that only you can
+   create, update or delete.
+
+Running the workflow by hand is a dry run: it builds and packages without
+publishing. Actions are pinned to commit SHAs; Dependabot proposes updates.
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org)
 (`feat:`, `fix:`, `docs:`, `build:` ...), which is what the changelog groups by.

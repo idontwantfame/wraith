@@ -23,9 +23,11 @@ import shutil
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from signing_key import public_key_pem  # noqa: E402 (sibling module)
+
 BUILD_DIR = Path(".pio/build/esp32c3")
 PARTITIONS_CSV = Path("partitions_ota.csv")
-SIGNING_HEADER = Path("src/ota_signing.h")
 FS_PARTITION = "spiffs"  # LittleFS lives in the partition labelled spiffs
 MARKER_MAGIC = b"WRAITHFW"  # fw_marker.h: magic + uint32 build, little-endian
 FLASH_ERASED = b"\xff"
@@ -51,17 +53,6 @@ def fs_offset() -> int:
             return int(row[3], 0)
     fail(f"no '{FS_PARTITION}' partition in {PARTITIONS_CSV}")
     return 0  # unreachable
-
-
-def public_key_pem() -> str:
-    source = SIGNING_HEADER.read_text()
-    match = re.search(r"kOtaPublicKeyPem\[\]\s*=(.*?);", source, re.S)
-    if not match:
-        fail(f"kOtaPublicKeyPem not found in {SIGNING_HEADER}")
-    pem = "".join(re.findall(r'"([^"]*)"', match.group(1))).replace("\\n", "\n")
-    if "BEGIN PUBLIC KEY" not in pem or "PRIVATE" in pem:
-        fail(f"kOtaPublicKeyPem in {SIGNING_HEADER} is not a public key")
-    return pem
 
 
 def factory_image(boot_and_app: bytes, fs_image: bytes, fs_at: int) -> bytes:
@@ -105,7 +96,7 @@ def main() -> None:
     parser.add_argument("version", help="release version, e.g. v1.2.0")
     parser.add_argument("--out", type=Path, default=Path("release"))
     args = parser.parse_args()
-    if not VERSION_PATTERN.match(args.version):
+    if not VERSION_PATTERN.fullmatch(args.version):
         fail(f"'{args.version}' is not a usable version (letters, digits, . _ -)")
 
     inputs = {name: BUILD_DIR / name for name in ("firmware.bin", "firmware.factory.bin", "littlefs.bin")}
@@ -125,7 +116,10 @@ def main() -> None:
     shutil.copyfile(inputs["littlefs.bin"], assets / f"{name}-littlefs.bin")
     (assets / f"{name}-factory.bin").write_bytes(factory_image(
         inputs["firmware.factory.bin"].read_bytes(), inputs["littlefs.bin"].read_bytes(), fs_at))
-    (assets / "ota_public_key.pem").write_text(public_key_pem())
+    try:
+        (assets / "ota_public_key.pem").write_text(public_key_pem())
+    except ValueError as error:
+        fail(str(error))
     (args.out / "notes.md").write_text(notes(args.version, build, fs_at))
 
     print(f"Packaged {name} (build {build}) into {assets}:")
