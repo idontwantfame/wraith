@@ -1,0 +1,119 @@
+name: Release
+
+# Push a tag like v1.2.0 (or v1.2.0-rc.1 for a pre-release) to build, sign and
+# publish a GitHub release. Running it by hand builds and packages without
+# publishing (a dry run; the package is kept as a workflow artifact).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and package
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.package.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the changelog needs the history and tags
+          persist-credentials: false
+
+      - name: Check the tag
+        if: github.ref_type == 'tag'
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Release tags look like v1.2.3 or v1.2.3-rc.1 (got '$GITHUB_REF_NAME')"
+            exit 1
+          fi
+
+      - uses: ./.github/actions/build
+
+      - name: Package
+        id: package
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+        run: python3 tools/release/package.py "$VERSION"
+
+      - name: Changelog
+        run: |
+          pip install git-cliff==2.14.2
+          if [ "$GITHUB_REF_TYPE" = tag ]; then range=--current; else range=--unreleased; fi
+          { echo; git cliff "$range" --strip header; } >> release/notes.md
+          cat release/notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+
+  # The only job with the signing key. It runs no third-party code: first-party
+  # actions, tools/ota/sign.sh (openssl) and the GitHub CLI.
+  publish:
+    name: Sign and publish
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: release
+
+      - name: Sign the firmware and the checksums
+        env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+        run: |
+          if [ -z "$OTA_SIGNING_KEY" ]; then
+            echo "::error::The OTA_SIGNING_KEY secret is not set; refusing to publish an unsigned release"
+            exit 1
+          fi
+          (umask 077 && printf '%s\n' "$OTA_SIGNING_KEY" > tools/ota/ota_private_key.pem)
+          cd release/assets
+          ../../tools/ota/sign.sh wraith-*-firmware.bin
+          sha256sum -- * > SHA256SUMS
+          ../../tools/ota/sign.sh SHA256SUMS
+
+      - name: Remove the key
+        if: always()
+        run: rm -f tools/ota/ota_private_key.pem
+
+      # Catches a secret that doesn't match the key compiled into the firmware:
+      # devices would reject every update signed with it.
+      - name: Verify the signatures against the firmware's public key
+        run: |
+          cd release/assets
+          for file in wraith-*-firmware.bin SHA256SUMS; do
+            openssl base64 -d -A -in "$file.sig" -out "$RUNNER_TEMP/signature"
+            openssl dgst -sha256 -verify ota_public_key.pem -signature "$RUNNER_TEMP/signature" "$file"
+          done
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD: ${{ needs.build.outputs.build }}
+        run: |
+          prerelease=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" release/assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Wraith $GITHUB_REF_NAME (build $BUILD)" \
+            --notes-file release/notes.md \
+            "${prerelease[@]}"

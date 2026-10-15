@@ -1,0 +1,30 @@
+# PlatformIO build output and caches
+.pio/
+.pioenvs/
+.piolibdeps/
+compile_commands.json
+
+# Release packaging output (tools/release/package.py)
+/release/
+
+# OTA signing: never commit a key or a generated signature. The private key
+# lives only on the maintainer's machine and in the OTA_SIGNING_KEY CI secret;
+# the public key is compiled into src/ota_signing.h.
+tools/ota/*.pem
+*.sig
+
+# Host-test binaries
+test/*.out
+test/*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Editors and OS (keep the shared extension recommendation)
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store

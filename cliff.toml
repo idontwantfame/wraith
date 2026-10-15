@@ -1,0 +1,43 @@
+# git-cliff: release notes from Conventional Commits (feat:, fix:, docs: ...).
+# The release workflow runs `git cliff --current`. Preview unreleased changes
+# locally with `git cliff --unreleased` (pip install git-cliff).
+
+[changelog]
+header = """
+# Changelog\n
+"""
+body = """
+{% if version %}\
+    ## {{ version }} ({{ timestamp | date(format="%Y-%m-%d") }})
+{% else %}\
+    ## Unreleased
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+    ### {{ group | striptags | trim | upper_first }}
+    {% for commit in commits %}
+        - {% if commit.scope %}**{{ commit.scope }}:** {% endif %}\
+            {% if commit.breaking %}**Breaking:** {% endif %}\
+            {{ commit.message | upper_first }} ({{ commit.id | truncate(length=7, end="") }})\
+    {% endfor %}
+{% endfor %}\n
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^refactor", group = "<!-- 3 -->Refactoring" },
+  { message = "^docs", group = "<!-- 4 -->Documentation" },
+  { message = "^(build|ci)", group = "<!-- 5 -->Build and CI" },
+  { message = "^test", group = "<!-- 6 -->Tests" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore", group = "<!-- 7 -->Other" },
+]
+filter_commits = false
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"

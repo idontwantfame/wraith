@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <!-- No inline scripts: lock script execution to our own file, so a reflected
+       BLE name / SSID can never run even if it reaches the DOM. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'" />
+  <title>Wraith</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Wraith<span class="brand-sub">fog controller</span></div>
+    <div class="topbar-right">
+      <span id="clock" class="clock">…</span>
+      <div id="linkPill" class="pill pill-muted">…</div>
+    </div>
+  </header>
+
+  <div id="faultBanner" class="fault-banner" hidden></div>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="control">Control</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </nav>
+
+  <main>
+    <!-- Control -->
+    <section class="panel active" id="tab-control">
+      <div class="status-grid">
+        <div class="stat"><span class="stat-label">Fog</span><span id="sFog" class="stat-val">…</span></div>
+        <div class="stat"><span class="stat-label">Battery</span><span id="sBatt" class="stat-val">…</span></div>
+      </div>
+
+      <div class="fog-actions">
+        <button id="btnStart" class="btn btn-start">START FOG</button>
+        <button id="btnStop" class="btn btn-stop">STOP</button>
+      </div>
+      <p class="hint">Start is attended-only; it asks for confirmation. Stop is always one tap.</p>
+
+      <div class="control-row">
+        <label for="density">Density <output id="densityOut">…</output></label>
+        <input type="range" id="density" min="0" max="100" step="5" value="50" />
+      </div>
+      <div class="control-row">
+        <label for="fan">Fan <output id="fanOut">…</output></label>
+        <input type="range" id="fan" min="35" max="100" step="5" value="70" />
+      </div>
+
+      <div class="control-row">
+        <label>Modes / timer <span id="progState" class="meta">idle</span></label>
+        <div class="presets">
+          <button class="chip" data-on="5" data-off="5" data-rep="5">Pulse 5×</button>
+          <button class="chip" data-on="1" data-off="1" data-rep="10">Strobe</button>
+          <button class="chip" data-on="10" data-off="20" data-rep="6">Long bursts</button>
+          <button class="chip" data-on="3" data-off="3" data-rep="0">Continuous pulse</button>
+        </div>
+        <div class="prog-grid">
+          <label>On (s)<input type="number" id="progOn" min="0.5" step="0.5" value="5" /></label>
+          <label>Off (s)<input type="number" id="progOff" min="0.5" step="0.5" value="5" /></label>
+          <label>Repeats<input type="number" id="progRep" min="0" step="1" value="5" /></label>
+        </div>
+        <p class="hint">Repeats = 0 runs until stopped (auto-stops after 2 h).
+          Starting a program begins fogging; keep it attended.</p>
+        <div class="fog-actions">
+          <button id="btnProgStart" class="btn btn-start">START PROGRAM</button>
+          <button id="btnProgStop" class="btn btn-stop">STOP</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings: Wi-Fi + Machine + Home Assistant + Device/Time/Firmware/Maintenance -->
+    <section class="panel" id="tab-settings">
+      <div class="row-between">
+        <h2>Wi-Fi</h2>
+        <button id="btnWifiScan" class="btn btn-ghost">Scan</button>
+      </div>
+      <p class="hint">Status: <code id="wifiState">…</code> · <code id="wifiIp">…</code></p>
+      <ul id="wifiList" class="list"></ul>
+      <div class="form">
+        <input id="wifiSsid" placeholder="SSID" autocomplete="off" />
+        <input id="wifiPass" type="password" placeholder="Password" autocomplete="off" />
+        <button id="btnWifiConnect" class="btn btn-primary">Connect</button>
+      </div>
+
+      <div class="row-between">
+        <h2>Fog machine</h2>
+        <button id="btnMachineScan" class="btn btn-ghost">Rescan</button>
+      </div>
+      <p class="hint">Current target: <code id="curTarget">…</code></p>
+      <button id="btnMachineDisconnect" class="btn btn-ghost">Disconnect / clear target</button>
+      <ul id="machineList" class="list"></ul>
+
+      <h2>Home Assistant (MQTT)</h2>
+      <p class="hint">Status: <code id="mqttState">…</code></p>
+      <div class="form">
+        <label class="check"><input type="checkbox" id="mqttEnabled" /> Enable MQTT</label>
+        <select id="mqttTransport" aria-label="Connection type">
+          <option value="mqtt">MQTT (TCP)</option>
+          <option value="mqtts">MQTT over TLS</option>
+          <option value="ws">MQTT over WebSocket</option>
+          <option value="wss">MQTT over secure WebSocket (TLS)</option>
+        </select>
+        <input id="mqttHost" placeholder="Broker host (e.g. 192.168.1.10)" />
+        <input id="mqttPort" type="number" placeholder="Port" value="1883" />
+        <input id="mqttPath" placeholder="WebSocket path (e.g. /mqtt)" autocomplete="off" hidden />
+        <textarea id="mqttCa" rows="4" placeholder="Broker CA certificate (PEM), required for TLS"
+                  autocomplete="off" spellcheck="false" hidden></textarea>
+        <label class="check" id="mqttClearCaRow" hidden>
+          <input type="checkbox" id="mqttClearCa" /> Remove the saved CA certificate
+        </label>
+        <label class="check" id="mqttSkipCnRow" hidden>
+          <input type="checkbox" id="mqttSkipCn" /> Don't check the broker's host name
+          (the CA is still verified; use when connecting by IP)
+        </label>
+        <input id="mqttUser" placeholder="Username (optional)" autocomplete="off" />
+        <input id="mqttPass" type="password" placeholder="Password" autocomplete="off" />
+        <input id="mqttTopic" placeholder="Base topic" value="wraith" />
+        <label class="check">
+          <input type="checkbox" id="mqttIgnite" /> Allow remote fog START + density/fan (unsafe)
+        </label>
+        <input id="devicePass" type="password" placeholder="Device password (to allow remote START)" autocomplete="off" />
+        <button id="btnMqttSave" class="btn btn-primary" disabled>Save &amp; reboot</button>
+      </div>
+      <p class="hint">Entities auto-register via HA MQTT discovery. Remote start and
+        density/fan stay off unless explicitly allowed (STOP always works), so
+        automations cannot ignite or retune fog unattended.
+        Allowing it (or changing the broker while it is allowed) needs the device
+        password: the setup-AP password printed on the serial console at boot.</p>
+
+      <h2>Device</h2>
+      <p class="hint">Reachable at <code id="curHost">…</code></p>
+      <div class="form">
+        <input id="hostname" placeholder="hostname (letters, numbers, hyphens)" autocomplete="off" />
+        <button id="btnHostSave" class="btn btn-primary" disabled>Save hostname</button>
+      </div>
+      <p class="hint">Sets <code>http://&lt;name&gt;.local</code>. Blank = auto
+        (<code>wraith-xxxxxx</code>). Applies immediately.</p>
+
+      <h2>Time</h2>
+      <p class="hint">Device time: <code id="devTime">…</code></p>
+      <div class="form">
+        <input id="tz" placeholder="POSIX TZ (e.g. GMT0BST,M3.5.0/1,M10.5.0)" />
+        <input id="ntp" placeholder="NTP server" value="pool.ntp.org" />
+        <button id="btnTzGuess" class="btn btn-ghost">Guess from IP</button>
+        <button id="btnTimeSave" class="btn btn-primary" disabled>Save time settings</button>
+      </div>
+      <p class="hint">Timezone applies immediately; a new NTP server takes effect
+        after reboot. Examples. UK: <code>GMT0BST,M3.5.0/1,M10.5.0</code> ·
+        CET: <code>CET-1CEST,M3.5.0,M10.5.0/3</code> · US Eastern:
+        <code>EST5EDT,M3.2.0,M11.1.0</code> · UTC: <code>GMT0</code></p>
+
+      <h2>Firmware update</h2>
+      <form id="otaForm" class="form">
+        <label class="hint">Firmware image (.bin)</label>
+        <input type="file" id="otaFile" accept=".bin" />
+        <label class="hint">Signature (.sig), required unless signing is disabled</label>
+        <input type="file" id="otaSig" accept=".sig,.txt" />
+        <button type="submit" class="btn btn-primary">Upload &amp; flash</button>
+        <progress id="otaProgress" value="0" max="100" hidden></progress>
+      </form>
+      <h2>Maintenance</h2>
+      <div class="form">
+        <button id="btnReboot" class="btn btn-ghost">Reboot</button>
+        <button id="btnFactory" class="btn btn-danger">Factory reset</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

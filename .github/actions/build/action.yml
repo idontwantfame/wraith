@@ -1,0 +1,34 @@
+name: Test and build
+description: Set up a pinned PlatformIO, run the host tests, build the firmware and the web UI image.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.13"
+
+    - name: Cache PlatformIO packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.platformio
+        key: platformio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+        restore-keys: platformio-${{ runner.os }}-
+
+    - name: Install PlatformIO
+      shell: bash
+      run: pip install platformio==6.2.0
+
+    - name: Host unit tests
+      shell: bash
+      run: pio test -e native -e native_tls
+
+    - name: Check the web UI script
+      shell: bash
+      run: node --check data/app.js
+
+    - name: Build firmware and web UI image
+      shell: bash
+      run: |
+        pio run
+        pio run -t buildfs
