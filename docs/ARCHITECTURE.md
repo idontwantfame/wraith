@@ -44,9 +44,23 @@ task; other tasks hand requests over through mutex-guarded or atomic state.
   `POST /api/fog/start` within 8 s. The UI asks for confirmation.
 - Programs: at most 60 s per pulse and a 2-hour total runtime; a manual or MQTT
   command cancels a running program. The serial `stop` cancels programs too.
+- **A program never restarts fog the machine stopped.** During each pulse it
+  watches the machine's output byte (`program_watch.h`): if output stops early
+  (the machine's button, its protection) or never starts, the program ends with
+  a stop, and `/api/status` says why (`program.last_stop`). Limit: the machine
+  needs up to ~0.65 s to switch, so a stop in roughly the first second of a
+  pulse, or just before its scheduled end, looks like the program's own; then
+  the next pulse still starts. Short-pulse programs (e.g. 1 s strobe) should be
+  stopped from Wraith.
 - Remote control over MQTT (start, density, fan) is off by default. Turning it
   on needs the device password. Stop is always accepted.
 - OTA is refused while fog runs or a stop is still pending.
+- **If the controller dies, the machine keeps fogging for about a minute.** In
+  attended tests (2026-10-21), pulling the ESP32's power mid-fog left the
+  machine spraying for roughly 60 s before it stopped by itself. Nothing on the
+  controller can send a stop then, so avoid anything that resets it while fog
+  runs; the serial monitor opens without toggling DTR / RTS for this reason.
+  A normal disconnect is different: it sends a stop first.
 
 ## Security model
 
@@ -73,7 +87,7 @@ JSON bodies. `/ws` pushes the same JSON as `/api/status` about once a second.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/status` | Machine link, fog state, batteries, faults, program, Wi-Fi, MQTT, `fw_build` |
+| GET | `/api/status` | Machine link, fog state, batteries, machine report, program (incl. `last_stop`), Wi-Fi (incl. access point `bssid` / `channel`), MQTT, `fw_build` |
 | GET | `/api/config` | Saved settings (never returns passwords) |
 | POST | `/api/fog/arm`, `/api/fog/start` | Two-step fog start |
 | POST | `/api/fog/stop` | Stop fog and any program |
@@ -118,12 +132,19 @@ is on, a fog switch and density / fan sliders appear as well.
 - The web UI lives on LittleFS and changes only by USB (`pio run -t uploadfs`)
   or a factory image; OTA replaces the app alone.
 
-## Open hardware checks
+## Hardware checks
 
-Still to verify with the machine on and someone watching it:
+Passed in attended tests (2026-10-20/21, build 2610151253; evidence in the
+ULFACE repo, `docs/HANDOFF_2026-10-21.md`): 30 s and 90 s fog runs; normal
+Disconnect while fogging (stop sent first); web / API stop during a program
+(later pulses cancelled); removing the machine's batteries mid-program (program
+aborted, stop on reconnect, no restart).
 
-- Serial `stop` during a running program; switching or disconnecting the
-  machine while fogging; power-cycling the machine mid-fog (expect a stop on
-  reconnect).
+Still to verify, with the machine on and someone watching it:
+
+- The machine's own button during a program now ends the program (fixed after
+  the 2026-10-21 test showed the next pulse restarting fog).
+- Serial `stop` and `status` over USB (the console moved to the native USB
+  port; before, it listened on UART0 pins and never answered over USB).
 - Phone onboarding through the captive portal on iOS and Android.
 - MQTT over WebSocket against a real broker listener.

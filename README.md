@@ -7,7 +7,9 @@ Wi-Fi, timed fog programs, and an optional Home Assistant integration over MQTT.
 > **Safety.** This drives a real fog machine. Fog never starts on its own; a
 > start needs a confirmed, two-step request, and stop is always one tap and
 > always accepted. Keep fog runs attended, and keep the device on a trusted
-> network: the web UI has no login.
+> network: the web UI has no login. If the controller loses power or resets
+> while fogging, the machine keeps going for about a minute before it stops by
+> itself; use the machine's own button to stop it sooner.
 
 ## Features
 
@@ -22,8 +24,10 @@ Wi-Fi, timed fog programs, and an optional Home Assistant integration over MQTT.
 
 ## What you need
 
-- An ESP32-C3 board with 4 MB flash (built and tested on an
-  `esp32-c3-devkitm-1`).
+- An ESP32-C3 board with 4 MB flash whose USB connector is the chip's native
+  USB (most small C3 boards). The serial console uses it. For a board with a
+  USB-UART bridge chip instead, set `ARDUINO_USB_MODE` and
+  `ARDUINO_USB_CDC_ON_BOOT` to 0 in `platformio.ini`.
 - The fog machine. It shows up as `CH9141BLE2U`. Switch its handheld remote
   off while Wraith is in charge: the remote reconnects and takes the link.
 
