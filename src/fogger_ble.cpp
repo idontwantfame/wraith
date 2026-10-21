@@ -553,8 +553,9 @@ bool FoggerBle::requestPowerOff() {
   // Connect-gated like START: latched across a drop, it would switch the
   // machine off again the next time someone powers it on.
   if (!connected()) return false;
-  powerOffAtMs_.store(millis());
-  powerOffHold_.store(true);
+  const uint32_t now = millis();
+  powerOffAtMs_.store(now);
+  powerOffHoldUntilMs_.store((now + kPowerOffHoldMs) | 1);  // never 0 (= no hold)
   runIntent_.store(kRunStop);  // fog still ends if the power-off write never lands
   powerOffReq_.store(true);
   // The link may have dropped (and been torn down) since the check above: don't
@@ -567,14 +568,16 @@ bool FoggerBle::requestPowerOff() {
 }
 
 bool FoggerBle::powerOffHeld() const {
-  // Signed: the stamp may come from another task a moment after our millis().
-  return powerOffHold_.load() &&
-         (int32_t)(millis() - powerOffAtMs_.load()) < (int32_t)kPowerOffHoldMs;
+  // Signed, so a deadline stamped by another task a moment after our millis()
+  // still reads as held. serviceCommands() clears it once expired, before the
+  // signed difference could wrap back to positive.
+  const uint32_t until = powerOffHoldUntilMs_.load();
+  return until != 0 && (int32_t)(until - millis()) > 0;
 }
 
 void FoggerBle::clearPowerOff() {
   powerOffReq_.store(false);
-  powerOffHold_.store(false);
+  powerOffHoldUntilMs_.store(0);
 }
 
 bool FoggerBle::writeFrame(const uint8_t* buf, size_t len) {
@@ -608,11 +611,19 @@ void FoggerBle::serviceCommands() {
   }
   // While a power-off is held, this loop is the final arbiter: a START, density
   // or fan that slipped past the request-side check (racing requestPowerOff on
-  // another task) is dropped here, never written.
+  // another task) is never written. The START becomes a STOP rather than being
+  // dropped, since it may have overwritten the STOP latched with the power-off.
   const bool held = powerOffHeld();
   if (held) {
     uint8_t start = kRunStart;
-    runIntent_.compare_exchange_strong(start, kRunNone);
+    runIntent_.compare_exchange_strong(start, kRunStop);
+  } else {
+    // Clear an expired hold (CAS on the expired value, so a newer request isn't
+    // lost); left set, the signed check would read held again ~24.9 days later.
+    uint32_t until = powerOffHoldUntilMs_.load();
+    if (until != 0 && (int32_t)(until - millis()) <= 0) {
+      powerOffHoldUntilMs_.compare_exchange_strong(until, 0);
+    }
   }
 
   const uint8_t intent = runIntent_.load();
@@ -649,9 +660,11 @@ void FoggerBle::serviceCommands() {
   // at the top (a STOP that arrived since must win, so don't re-read as START).
   if (intent == kRunStart && runIntent_.load() == kRunStart) {
     uint8_t expected = kRunStart;
-    if (powerOffHeld() ||
-        (int32_t)(millis() - runIntentAtMs_.load()) > (int32_t)kStartWriteTtlMs) {
-      // Switching off, or too stale (writes kept failing): drop it, never ignite.
+    if (powerOffHeld()) {
+      // A power-off arrived during this pass: never ignite; keep its STOP.
+      runIntent_.compare_exchange_strong(expected, kRunStop);
+    } else if ((int32_t)(millis() - runIntentAtMs_.load()) > (int32_t)kStartWriteTtlMs) {
+      // Too stale (writes kept failing): drop it rather than ignite late.
       runIntent_.compare_exchange_strong(expected, kRunNone);
     } else if (writeFrame(buf, buildFogStart(buf))) {
       runIntent_.compare_exchange_strong(expected, kRunNone);

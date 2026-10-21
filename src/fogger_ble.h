@@ -169,8 +169,10 @@ class FoggerBle {
   std::atomic<bool> startsInhibited_{false};  // set once by inhibitStarts()
   std::atomic<bool> fogStopOwed_{false};      // see stopOwed()
   std::atomic<bool> powerOffReq_{false};      // see requestPowerOff()
-  std::atomic<bool> powerOffHold_{false};     // set with powerOffReq_, kept after the write
-  std::atomic<uint32_t> powerOffAtMs_{0};     // when the power-off was requested
+  std::atomic<uint32_t> powerOffAtMs_{0};     // when it was requested (write TTL)
+  // millis() until which START/adjust are refused after a power-off; 0 = none.
+  // One word, so the loop can clear an expired hold without losing a newer one.
+  std::atomic<uint32_t> powerOffHoldUntilMs_{0};
   std::atomic<uint32_t> densVal_{0};
   std::atomic<uint32_t> fanVal_{0};
 

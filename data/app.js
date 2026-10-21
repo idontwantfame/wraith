@@ -474,12 +474,12 @@ $("btnMachineDisconnect").addEventListener("click", async () => {
   toast(r.ok ? "Disconnected" : "Failed: " + (r.error || "?"), !r.ok);
   loadMachines();
 });
-// One-way: nothing over BLE can switch the machine back on.
+// One-way: nothing over BLE has switched the machine back on so far.
 $("btnMachinePowerOff").addEventListener("click", async () => {
   if (!confirm("Power off the fog machine? Only its own button can switch it on again.")) return;
   const r = await api("/api/machine/power_off", "POST");
   toast(
-    r.ok ? "Power-off sent; the machine switches off in a few seconds" : "Failed: " + (r.error || "?"),
+    r.ok ? "Power-off queued; the machine should switch off within about 10 s" : "Failed: " + (r.error || "?"),
     !r.ok
   );
 });

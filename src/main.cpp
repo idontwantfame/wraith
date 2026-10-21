@@ -102,6 +102,7 @@ void maybeAutoGuessTimezone() {
 // Serial and MQTT power-off (the web route does the same through its deps).
 // A running program ends first, so it can't fire again.
 bool powerOffMachine() {
+  if (!g_fogger.connected()) return false;  // nothing to switch off; no "powered off"
   if (g_seq.running()) g_seq.stop("powered off");
   return g_fogger.requestPowerOff();
 }

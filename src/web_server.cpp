@@ -531,6 +531,10 @@ void WebServer::registerRoutes() {
   // confirms first. A running program ends first so it can't fire again.
   server_.on("/api/machine/power_off", HTTP_POST, [this](AsyncWebServerRequest* req) {
     if (!guardMutation(req)) return;
+    if (!deps_.fogger->connected()) {  // nothing to switch off; no "powered off"
+      sendResult(req, false, "not connected");
+      return;
+    }
     if (deps_.seq != nullptr && deps_.seq->running()) deps_.seq->stop("powered off");
     sendResult(req, deps_.fogger->requestPowerOff(), "not connected");
   });
