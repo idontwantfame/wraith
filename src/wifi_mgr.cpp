@@ -58,6 +58,11 @@ bool WifiManager::begin(const WifiConfig& cfg) {
   goodPass_ = cfg.pass;
   WiFi.persistent(false);       // we own credential storage (NVS via Config)
   WiFi.setAutoReconnect(false);  // we drive (re)connects; don't silently rejoin
+  // Join the strongest access point of the network. The core's default fast
+  // scan takes the first AP found with the SSID (channels in order), which on
+  // a multi-AP network can be a far one; sorting by signal needs the full scan.
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
 
   // Debug visibility: log the key Wi-Fi events (AP client join/leave, scan
   // done, STA associate / got-IP / disconnect-with-reason).

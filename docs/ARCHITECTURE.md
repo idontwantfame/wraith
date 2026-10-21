@@ -22,7 +22,7 @@ optional MQTT / Home Assistant integration over Wi-Fi.
 | `sequencer` | Timed programs (on / off / repeat) with safety caps. |
 | `web_server` | ESPAsyncWebServer: the UI from LittleFS, `/api/*`, the `/ws` status push, the captive portal, signed OTA. |
 | `mqtt_ha`, `mqtt_settings.h` | ESP-IDF esp-mqtt client on its own task, Home Assistant discovery, settings validation (host-tested). |
-| `wifi_mgr` | Station mode with a WPA2 setup access point as fallback, captive portal, mDNS. |
+| `wifi_mgr` | Station mode with a WPA2 setup access point as fallback, captive portal, mDNS. Joins the strongest access point of the network (full scan, sorted by signal); no roaming afterwards. |
 | `ota`, `ota_signing.h`, `fw_marker.h`, `fw_version` | Signature-checked OTA, the embedded build number, the downgrade floor. |
 | `config` | Settings in NVS behind one writer lock. |
 | `timekeeper` | SNTP, POSIX time zone, optional time-zone guess from the public IP. |
