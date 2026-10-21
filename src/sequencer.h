@@ -5,12 +5,16 @@
 //
 // Safety: per-pulse on-time is capped, and a whole program is force-stopped
 // after a hard maximum runtime so a mistaken "infinite" program cannot run
-// away. stop() always sends a fog STOP.
+// away. stop() always sends a fog STOP. If the machine stops output on its own
+// during a pulse (its button, its protection) or refuses a pulse, the program
+// ends instead of restarting fog (program_watch.h).
 #pragma once
 
 #include <Arduino.h>
 
 #include <functional>
+
+#include "program_watch.h"
 
 namespace fogger {
 
@@ -32,6 +36,10 @@ struct SeqStatus {
   uint16_t repeats = 0;           // 0 = infinite
   uint32_t phaseRemainingMs = 0;
   uint32_t elapsedMs = 0;
+  // Why the last program ended: "" (none since boot or still running),
+  // "completed", "stopped", "taken over" (manual / MQTT control), "link lost",
+  // "runtime cap", "machine stopped", "machine did not start".
+  const char* lastStop = "";
 };
 
 class Sequencer {
@@ -40,12 +48,15 @@ class Sequencer {
   using DensityAction = std::function<bool(uint32_t)>;
   using FanAction = std::function<bool(uint8_t)>;
   using Predicate = std::function<bool()>;
+  using OutputProbe = std::function<OutputSample()>;
 
   // Wire the command callbacks. `connected` reports whether the machine link is
   // up, so the program can refuse to start, and abort rather than blindly
-  // re-fire, when there is no link. Creates the internal lock; call once.
+  // re-fire, when there is no link. `output` reports the machine's actual output
+  // from fresh telemetry, so a pulse the machine stopped or refused ends the
+  // program. Creates the internal lock; call once.
   void wire(Action fogStart, Action fogStop, DensityAction density, FanAction fan,
-            Predicate connected);
+            Predicate connected, OutputProbe output);
 
   // Start a (clamped) program. Returns false if commands are not wired or the
   // machine is not connected (so the UI reports an honest failure).
@@ -63,7 +74,9 @@ class Sequencer {
   // State mutators that assume the caller already holds mutex_.
   void enterOnLocked();
   void enterOffLocked();
-  void stopLocked();
+  void stopLocked(const char* reason);
+  // True if the machine's own output ended the program during an on pulse.
+  bool outputEndedLocked();
 
   FogProgram prog_;
   bool running_ = false;
@@ -71,6 +84,8 @@ class Sequencer {
   uint16_t cycle_ = 0;
   uint32_t phaseEndMs_ = 0;
   uint32_t startMs_ = 0;
+  PulseWatch watch_;
+  const char* lastStop_ = "";
 
   // Guards all mutable state: web handlers call start/stop/cancel on the async
   // task while loop() advances the program on the main task. void* so this
@@ -82,6 +97,7 @@ class Sequencer {
   DensityAction density_;
   FanAction fan_;
   Predicate connected_;
+  OutputProbe output_;
 };
 
 }  // namespace fogger

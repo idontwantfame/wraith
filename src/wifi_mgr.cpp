@@ -261,6 +261,10 @@ WifiStatus WifiManager::status() const {
     s.ssid = WiFi.SSID().c_str();  // the network actually joined, not a candidate
     s.ip = WiFi.localIP().toString().c_str();
     s.rssi = WiFi.RSSI();
+    // Which access point: with several APs on one SSID, a far one explains a
+    // weak RSSI and slow replies.
+    s.bssid = WiFi.BSSIDstr().c_str();
+    s.channel = WiFi.channel();
   } else if (m == WifiMode::kApPortal) {
     s.ssid = cfg_.apName;
     s.ip = WiFi.softAPIP().toString().c_str();

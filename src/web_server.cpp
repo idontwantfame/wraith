@@ -228,6 +228,8 @@ std::string WebServer::buildStatusJson() const {
   wifi["ssid"] = w.ssid;
   wifi["ip"] = w.ip;
   wifi["rssi"] = w.rssi;
+  wifi["bssid"] = w.bssid;
+  wifi["channel"] = w.channel;
   wifi["portal"] = w.portal;
   wifi["host"] = deps_.wifi->hostname();
 
@@ -247,6 +249,7 @@ std::string WebServer::buildStatusJson() const {
     prog["cycle"] = ss.cycle;
     prog["repeats"] = ss.repeats;
     prog["phase_remaining_ms"] = ss.phaseRemainingMs;
+    prog["last_stop"] = ss.lastStop;
   }
 
   JsonObject tm = doc["time"].to<JsonObject>();

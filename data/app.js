@@ -93,6 +93,47 @@ function setStat(id, text, cls) {
   el.className = "stat-val" + (cls ? " " + cls : "");
 }
 
+// Machine report bits (status bytes 10..11), decoded from the machine's firmware
+// (docs/PROTOCOL.md). `fault`: the machine refuses or stops fog for it.
+const REPORT_BITS = [
+  { bit: 0x0001, text: "low battery", fault: true },
+  { bit: 0x0002, text: "battery reading invalid", fault: true },
+  { bit: 0x0004, text: "short circuit / over-current", fault: true },
+  { bit: 0x0008, text: "oil tank missing", fault: true },
+  { bit: 0x0020, text: "overheating", fault: true },
+  { bit: 0x0080, text: "battery imbalance", fault: true },
+  { bit: 0x0100, text: "dry burn (oil empty?)", fault: true },
+  { bit: 0x0200, text: "oil tank connected", fault: false },
+  { bit: 0x0400, text: "oil tank not recognised", fault: true },
+];
+
+// Describe a report word, e.g. "0x0208" -> { text, fault }.
+function describeReport(hex) {
+  const word = parseInt(hex, 16) || 0;
+  const parts = [];
+  let fault = false;
+  let known = 0;
+  for (const r of REPORT_BITS) {
+    if (word & r.bit) {
+      parts.push(r.text);
+      fault = fault || r.fault;
+      known |= r.bit;
+    }
+  }
+  const unknown = word & ~known;
+  if (unknown) parts.push("unknown event 0x" + unknown.toString(16).padStart(4, "0"));
+  return { text: parts.join("; "), fault };
+}
+
+// Why the last program ended (program.last_stop), when worth saying.
+const PROGRAM_ENDED = {
+  completed: "last program completed",
+  "machine stopped": "last program ended: the machine stopped fog",
+  "machine did not start": "last program ended: the machine did not start a pulse",
+  "link lost": "last program ended: machine link lost",
+  "runtime cap": "last program ended: 2-hour limit",
+};
+
 function renderStatus(d) {
   if (!d || !d.ble) return;
   const b = d.ble;
@@ -119,10 +160,15 @@ function renderStatus(d) {
   const battCls = !b.valid ? "" : b.charger ? "on" : b.batt_min < 20 ? "bad" : "";
   // Two packs; show both (the lower one is the limiter), bolt while charging.
   setStat("sBatt", b.valid ? b.batt_a + " / " + b.batt_b + "%" + bolt : "…", battCls);
-  // Fault: only surface a real (non-zero) fault, as a red banner at the top.
+  // Machine report (status bytes 10..11): the machine latches its last events
+  // there (not live state), and not every value is a fault. Amber for events
+  // such as "oil tank connected", red when the machine refuses or stops fog.
+  // Never hidden.
   const fb = $("faultBanner");
   if (b.valid && b.fault && b.fault !== "0x0000") {
-    fb.textContent = "⚠ Fault " + b.fault;
+    const r = describeReport(b.fault);
+    fb.textContent = "Last machine report " + b.fault + ": " + r.text;
+    fb.classList.toggle("alarm", r.fault);
     fb.hidden = false;
   } else {
     fb.hidden = true;
@@ -135,7 +181,10 @@ function renderStatus(d) {
   $("curTarget").textContent = b.target || "none";
 
   if (d.wifi) {
-    $("wifiState").textContent = d.wifi.mode + (d.wifi.portal ? " (portal)" : "");
+    const w = d.wifi;
+    // With several access points on one SSID, show which one we joined.
+    const ap = w.bssid ? ` · AP ${w.bssid} ch ${w.channel} · ${w.rssi} dBm` : "";
+    $("wifiState").textContent = w.mode + (w.portal ? " (portal)" : "") + ap;
     $("wifiIp").textContent = d.wifi.ip || "…";
     if (d.wifi.host) $("curHost").textContent = "http://" + d.wifi.host + ".local";
   }
@@ -146,7 +195,7 @@ function renderStatus(d) {
       ? `${p.phase} · pulse ${p.cycle}${p.repeats ? "/" + p.repeats : ""} · ${Math.ceil(
           p.phase_remaining_ms / 1000
         )}s`
-      : "idle";
+      : "idle" + (PROGRAM_ENDED[p.last_stop] ? " · " + PROGRAM_ENDED[p.last_stop] : "");
   }
 
   if (d.mqtt) {

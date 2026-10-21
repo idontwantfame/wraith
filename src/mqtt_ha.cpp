@@ -384,7 +384,9 @@ void MqttHa::publishDiscovery() {
     d["pl_off"] = "false";
     d["dev_cla"] = "plug";
   });
-  emit("sensor", "fault", "Fault code", [&](JsonDocument& d) {
+  // The machine's report word: events as well as faults (docs/PROTOCOL.md). The
+  // object id stays "fault" so existing Home Assistant setups keep the entity.
+  emit("sensor", "fault", "Machine report", [&](JsonDocument& d) {
     d["val_tpl"] = "{{ value_json.fault }}";
     d["ent_cat"] = "diagnostic";
     d["ic"] = "mdi:alert-circle";

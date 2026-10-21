@@ -132,6 +132,11 @@ void pollSerial() {
 
 void setup() {
   Serial.begin(115200);
+#if ARDUINO_USB_CDC_ON_BOOT
+  // Serial is the C3's native USB console. Never let a write wait for a host
+  // that is plugged in but not reading: it would stall loop(), and with it STOP.
+  Serial.setTxTimeoutMs(0);
+#endif
   delay(200);
   Serial.println(F("\nWraith controller booting…"));
 
@@ -196,7 +201,13 @@ void setup() {
              [] { return g_fogger.requestFogStop(); },
              [](uint32_t d) { return g_fogger.requestDensity(d); },
              [](uint8_t f) { return g_fogger.requestFan(f); },
-             [] { return g_fogger.connected(); });
+             [] { return g_fogger.connected(); },
+             [] {
+               const fogger::FoggerSnapshot s = g_fogger.snapshot();
+               return fogger::readOutput(s.connected, s.status.valid,
+                                         s.status.outputActive != 0, s.lastStatusMs,
+                                         millis());
+             });
 
   // Web control surface.
   fogger::WebServerDeps deps;

@@ -24,6 +24,8 @@ struct WifiStatus {
   std::string ssid;  // STA network when connected, else the AP SSID
   std::string ip;    // current IPv4 (STA local IP or AP IP)
   int rssi = 0;      // STA RSSI in dBm (0 while in AP/portal)
+  std::string bssid;  // access point joined (MAC), "" unless connected
+  int channel = 0;    // its Wi-Fi channel, 0 unless connected
   bool portal = false;
 };
 

@@ -46,12 +46,13 @@ const char* seqPhaseName(SeqPhase phase) {
 }
 
 void Sequencer::wire(Action fogStart, Action fogStop, DensityAction density,
-                     FanAction fan, Predicate connected) {
+                     FanAction fan, Predicate connected, OutputProbe output) {
   fogStart_ = std::move(fogStart);
   fogStop_ = std::move(fogStop);
   density_ = std::move(density);
   fan_ = std::move(fan);
   connected_ = std::move(connected);
+  output_ = std::move(output);
   if (mutex_ == nullptr) mutex_ = xSemaphoreCreateMutex();
 }
 
@@ -73,6 +74,7 @@ bool Sequencer::start(const FogProgram& program) {
   running_ = true;
   cycle_ = 1;
   startMs_ = millis();
+  lastStop_ = "";
   enterOnLocked();
   log_i("seq: start on=%ums off=%ums repeats=%u", prog_.onMs, prog_.offMs,
         prog_.repeats);
@@ -82,31 +84,62 @@ bool Sequencer::start(const FogProgram& program) {
 void Sequencer::enterOnLocked() {
   phase_ = SeqPhase::kOn;
   if (fogStart_) fogStart_();
-  phaseEndMs_ = millis() + prog_.onMs;
+  const uint32_t now = millis();
+  phaseEndMs_ = now + prog_.onMs;
+  watch_.begin(now);
 }
 
 void Sequencer::enterOffLocked() {
+  watch_.end();
   phase_ = SeqPhase::kOff;
   if (fogStop_) fogStop_();
   phaseEndMs_ = millis() + prog_.offMs;
 }
 
-void Sequencer::stopLocked() {
-  if (fogStop_) fogStop_();
+void Sequencer::stopLocked(const char* reason) {
+  watch_.end();
+  if (fogStop_) fogStop_();  // always: stop() doubles as a plain fog STOP
+  if (running_) {
+    lastStop_ = reason;  // only a program that actually ran gets a reason
+    log_i("seq: stopped (%s)", reason);
+  }
   running_ = false;
   phase_ = SeqPhase::kIdle;
-  log_i("seq: stopped");
 }
 
 void Sequencer::stop() {
   Lock lock(mutex_);
-  stopLocked();
+  stopLocked("stopped");
 }
 
 void Sequencer::cancel() {
   Lock lock(mutex_);
+  watch_.end();
+  if (running_) lastStop_ = "taken over";
   running_ = false;
   phase_ = SeqPhase::kIdle;
+}
+
+bool Sequencer::outputEndedLocked() {
+  // Only during a pulse, so an idle device doesn't snapshot telemetry on every
+  // loop(). The snapshot takes a short critical section, not a mutex, so it is
+  // fine under our lock (the BLE layer never takes the sequencer's lock).
+  if (phase_ != SeqPhase::kOn || !output_) return false;
+  switch (watch_.observe(output_())) {
+    case PulseVerdict::kStoppedOutside:
+      // The machine button or its protection stopped fog: never restart it.
+      // The STOP sent by stopLocked() also clears any START still latched.
+      log_w("seq: fog stopped outside the program in pulse %u; ending it", cycle_);
+      stopLocked("machine stopped");
+      return true;
+    case PulseVerdict::kDidNotStart:
+      log_w("seq: the machine did not start pulse %u; ending the program", cycle_);
+      stopLocked("machine did not start");
+      return true;
+    case PulseVerdict::kContinue:
+      break;
+  }
+  return false;
 }
 
 void Sequencer::loop() {
@@ -117,7 +150,7 @@ void Sequencer::loop() {
   // blindly re-firing fog when it comes back.
   if (connected_ && !connected_()) {
     log_w("seq: link lost; stopping program");
-    stopLocked();
+    stopLocked("link lost");
     return;
   }
 
@@ -126,16 +159,18 @@ void Sequencer::loop() {
   // Hard safety cap on total runtime, regardless of the program.
   if (now - startMs_ > kMaxProgramMs) {
     log_w("seq: hit max runtime cap; stopping");
-    stopLocked();
+    stopLocked("runtime cap");
     return;
   }
+
+  if (outputEndedLocked()) return;
 
   if ((int32_t)(now - phaseEndMs_) < 0) return;  // current phase still running
 
   if (phase_ == SeqPhase::kOn) {
     // Finished a pulse. If that was the last one, stop (no trailing off).
     if (prog_.repeats != 0 && cycle_ >= prog_.repeats) {
-      stopLocked();
+      stopLocked("completed");
       return;
     }
     enterOffLocked();
@@ -157,6 +192,7 @@ SeqStatus Sequencer::status() const {
   s.phase = phase_;
   s.cycle = cycle_;
   s.repeats = prog_.repeats;
+  s.lastStop = lastStop_;
   if (running_) {
     const uint32_t now = millis();
     s.phaseRemainingMs = (int32_t)(phaseEndMs_ - now) > 0 ? (phaseEndMs_ - now) : 0;
