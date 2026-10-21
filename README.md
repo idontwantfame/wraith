@@ -18,6 +18,8 @@ Wi-Fi, timed fog programs, and an optional Home Assistant integration over MQTT.
 - Timed programs: fog on X seconds, off Y, repeated N times (or until stopped),
   with a 60 s per-pulse and 2-hour total cap.
 - Finds machines nearby and remembers the one you pick; reconnects on its own.
+- Powers the machine off, as its remote does. Switching it back on needs the
+  machine's own button.
 - Signal bars for Wi-Fi and the machine link in the top bar (dBm on hover).
 - Wi-Fi setup through a captive portal on its own WPA2 access point.
 - Home Assistant discovery over MQTT. Remote start is off unless you allow it.
@@ -70,10 +72,10 @@ pio run -t upload       # build and flash the firmware (web UI included) over US
 ## Using it
 
 - **Control**: start (asks to confirm), stop, density, fan, and timed programs.
-- **Settings**: Wi-Fi, fog machine, Home Assistant, device name (sets
+- **Settings**: Wi-Fi, fog machine (pick, disconnect, power off), Home Assistant, device name (sets
   `http://<name>.local`), time zone, firmware update, reboot and factory reset.
 - **Home Assistant**: in Settings, enter your MQTT broker. Entities appear by
-  MQTT discovery: a Stop button and read-only sensors by default. "Allow remote
+  MQTT discovery: Stop and Power off buttons and read-only sensors by default. "Allow remote
   fog START + density/fan" (needs the device password) adds a fog switch and
   sliders, for automations you trust.
 - **Scripts**: see the HTTP API in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#http-api).
@@ -100,7 +102,7 @@ pio run                            # build (stamps the build number, signs if th
 pio run -t upload                  # flash the firmware (web UI included) over USB
 pio run -t ota                     # build, sign and install over Wi-Fi
 pio test -e native -e native_tls   # host unit tests
-pio device monitor                 # serial console: logs, `stop`, `status`
+pio device monitor                 # serial console: logs, `stop`, `status`, `poweroff`
 ```
 
 - **Build numbers** are automatic: the UTC build time as `yymmddHHMM` (e.g.

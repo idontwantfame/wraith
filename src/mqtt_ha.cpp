@@ -78,11 +78,13 @@ void addCommon(JsonDocument& doc, const MqttHaConfig& cfg, const std::string& na
 
 }  // namespace
 
-void MqttHa::onCommands(FogFn fogStart, FogFn fogStop, DensityFn density, FanFn fan) {
+void MqttHa::onCommands(FogFn fogStart, FogFn fogStop, DensityFn density, FanFn fan,
+                        FogFn powerOff) {
   fogStart_ = std::move(fogStart);
   fogStop_ = std::move(fogStop);
   density_ = std::move(density);
   fan_ = std::move(fan);
+  powerOff_ = std::move(powerOff);
 }
 
 std::string MqttHa::deviceTopic(const char* leaf) const {
@@ -188,7 +190,7 @@ void MqttHa::onConnected() {
   // Delete retained commands at the broker before subscribing (an empty retained
   // publish clears one). Any that still arrive are dropped by their retain flag.
   bool subscribed = true;
-  for (const char* leaf : {"fog/set", "density/set", "fan/set"}) {
+  for (const char* leaf : {"fog/set", "density/set", "fan/set", "power/set"}) {
     const std::string topic = deviceTopic(leaf);
     publish(topic, "", /*retain=*/true);
     subscribed &= esp_mqtt_client_subscribe_single(asClient(client_), topic.c_str(), 0) >= 0;
@@ -355,6 +357,14 @@ void MqttHa::publishDiscovery() {
     d["pl_prs"] = "OFF";
     d["ic"] = "mdi:stop-circle";
   });
+  // Power-off ends fog too, so it is always offered. One-way: afterwards only
+  // the machine's own button switches it on.
+  emit("button", "power_off", "Power off machine", [&](JsonDocument& d) {
+    d.remove("stat_t");
+    d["cmd_t"] = deviceTopic("power/set");
+    d["pl_prs"] = "OFF";
+    d["ic"] = "mdi:power";
+  });
   emit("binary_sensor", "fogging", "Fogging", [&](JsonDocument& d) {
     d["val_tpl"] = "{{ value_json.fog }}";
     d["pl_on"] = "ON";
@@ -461,7 +471,8 @@ void MqttHa::onMessage(const std::string& topic, const std::string& payload, boo
   const bool isFog = topic == deviceTopic("fog/set");
   const bool isDensity = topic == deviceTopic("density/set");
   const bool isFan = topic == deviceTopic("fan/set");
-  if (!isFog && !isDensity && !isFan) return;
+  const bool isPower = topic == deviceTopic("power/set");
+  if (!isFog && !isDensity && !isFan && !isPower) return;
   // A retained command is stale (replayed by the broker on subscribe, not sent
   // now): never act on one, so a stored ON can't re-ignite fog on a reconnect.
   if (retained) {
@@ -479,6 +490,11 @@ void MqttHa::onMessage(const std::string& topic, const std::string& payload, boo
     } else if (body == "OFF" && fogStop_) {
       fogStop_();
     }
+    return;
+  }
+  // Power-off ends fog, so like STOP it doesn't need remote control allowed.
+  if (isPower) {
+    if (upper(payload) == "OFF" && powerOff_) powerOff_();
     return;
   }
   // Density/fan change what the machine does, so like START they need remote

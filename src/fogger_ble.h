@@ -85,6 +85,14 @@ class FoggerBle {
   bool requestDensity(uint32_t density);
   bool requestFan(uint8_t fan);
 
+  // Switch the machine off the way its remote does (STOP + 03 01 in one write).
+  // One-way: it can then only be powered on with its own button. Only latched
+  // while connected and never delivered after a reconnect (that would switch a
+  // freshly powered-on machine straight back off); a power-off that can't be
+  // written within a few seconds is dropped, its STOP staying latched. Until
+  // the link drops, or for 15 s, START/density/fan are refused.
+  bool requestPowerOff();
+
   // One-way: refuse every later START/density/fan (any task) and turn a latched
   // START into a STOP. Called before a reboot so nothing (MQTT task, web) can
   // ignite during the final STOP flush.
@@ -134,6 +142,8 @@ class FoggerBle {
   void pollLinkRssi(uint32_t now);           // refresh rssi_ from the live link (loop only)
   bool writeFrame(const uint8_t* buf, size_t len);  // one GATT write
   void recordDiscovered(const std::string& mac, const std::string& name, int rssi);
+  bool powerOffHeld() const;  // a recent power-off still refuses START/adjust
+  void clearPowerOff();       // forget a pending power-off and its hold
 
   FoggerBleConfig cfg_;
   bool started_ = false;
@@ -158,6 +168,9 @@ class FoggerBle {
   std::atomic<bool> fanReq_{false};
   std::atomic<bool> startsInhibited_{false};  // set once by inhibitStarts()
   std::atomic<bool> fogStopOwed_{false};      // see stopOwed()
+  std::atomic<bool> powerOffReq_{false};      // see requestPowerOff()
+  std::atomic<bool> powerOffHold_{false};     // set with powerOffReq_, kept after the write
+  std::atomic<uint32_t> powerOffAtMs_{0};     // when the power-off was requested
   std::atomic<uint32_t> densVal_{0};
   std::atomic<uint32_t> fanVal_{0};
 

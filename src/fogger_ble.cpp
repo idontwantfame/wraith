@@ -14,7 +14,7 @@
 namespace fogger {
 namespace {
 
-constexpr size_t kMaxCmdBytes = 8;       // longest frame is the 7-byte density
+constexpr size_t kMaxCmdBytes = 8;       // longest writes: density and power-off (7)
 constexpr uint32_t kScanRestartMs = 12000;  // re-arm scan if nothing is found
 constexpr uint32_t kRssiPollMs = 2000;      // live-link signal refresh while connected
 constexpr bool kWriteWithResponse = true;   // protocol uses Write Request
@@ -25,6 +25,9 @@ constexpr uint8_t kRunStart = 1;
 constexpr uint8_t kRunStop = 2;
 constexpr uint32_t kStartWriteTtlMs = 3000;  // drop a START that can't be written in time
 constexpr int kStopBeforeDropAttempts = 2;    // STOP writes tried before a retarget drop
+// The machine switched off ~7 s after the remote's power-off in the captures.
+constexpr uint32_t kPowerOffWriteTtlMs = 3000;  // drop a power-off that can't be written in time
+constexpr uint32_t kPowerOffHoldMs = 15000;     // refuse START/adjust this long after one
 
 SemaphoreHandle_t asMutex(void* h) { return static_cast<SemaphoreHandle_t>(h); }
 NimBLEClient* asClient(void* h) { return static_cast<NimBLEClient*>(h); }
@@ -338,11 +341,13 @@ void FoggerBle::inhibitStarts() {
 
 void FoggerBle::applyTarget(const std::string& mac) {
   foundTarget_.store(false);
-  // Drop any pending ignite/adjust for the previous machine, but keep a STOP.
+  // Drop any pending ignite/adjust/power-off for the previous machine, but keep
+  // a STOP.
   uint8_t start = kRunStart;
   runIntent_.compare_exchange_strong(start, kRunNone);
   densReq_.store(false);
   fanReq_.store(false);
+  clearPowerOff();
   // Forget a stale matched address so a late advertisement can't reconnect the
   // old machine (reassembler is reset by handleDisconnect / connectToFound).
   if (xSemaphoreTake(asMutex(targetMux_), portMAX_DELAY) == pdTRUE) {
@@ -408,13 +413,14 @@ void FoggerBle::connectToFound() {
   // client is still up. The CAS keeps the kConnecting->kConnected transition
   // atomic with other paths; a drop during setup is caught here (isConnected)
   // and by the linkDropped_ flag on the next loop.
-  // Backstop: no START/density/fan can have been legitimately latched while the
-  // link was down (requests are connect-gated), so clear any stray intent before
-  // we go live. A pending STOP is preserved.
+  // Backstop: no START/density/fan/power-off can have been legitimately latched
+  // while the link was down (requests are connect-gated), so clear any stray
+  // intent before we go live. A pending STOP is preserved.
   uint8_t start = kRunStart;
   runIntent_.compare_exchange_strong(start, kRunNone);
   densReq_.store(false);
   fanReq_.store(false);
+  clearPowerOff();
 
   LinkState expected = LinkState::kConnecting;
   if (!asClient(client_)->isConnected() ||
@@ -457,12 +463,13 @@ void FoggerBle::handleDisconnect() {
   link_.store(LinkState::kIdle);
   resetReassembler_.store(true);  // notify task discards any half-frame
   nextScanAtMs_ = millis() + cfg_.reconnectBackoffMs;
-  // Stale ignite/adjust intents must not fire after reconnect; a STOP is kept so
-  // it is delivered the moment the link comes back.
+  // Stale ignite/adjust/power-off intents must not fire after reconnect; a STOP
+  // is kept so it is delivered the moment the link comes back.
   uint8_t start = kRunStart;
   runIntent_.compare_exchange_strong(start, kRunNone);
   densReq_.store(false);
   fanReq_.store(false);
+  clearPowerOff();
   // The machine may keep spraying with no link (the protocol never guarantees a
   // stop on link loss) and nothing can stop it meanwhile. If it was fogging,
   // latch a STOP so it is written the moment the link is back: a run is never
@@ -518,8 +525,9 @@ FoggerSnapshot FoggerBle::snapshot() const {
 bool FoggerBle::requestFogStart() {
   // Only latch START while connected, so a request made while the link is down
   // is NOT delivered on a later connect (no unattended ignition). Never while
-  // shutting down (reboot / OTA / factory reset flush a STOP first).
-  if (!connected() || startsInhibited_.load()) return false;
+  // shutting down (reboot / OTA / factory reset flush a STOP first), nor while
+  // the machine is switching off.
+  if (!connected() || startsInhibited_.load() || powerOffHeld()) return false;
   runIntentAtMs_.store(millis());
   runIntent_.store(kRunStart);
   return true;
@@ -530,16 +538,43 @@ bool FoggerBle::requestFogStop() {
   return connected();
 }
 bool FoggerBle::requestDensity(uint32_t density) {
-  if (!connected() || startsInhibited_.load()) return false;
+  if (!connected() || startsInhibited_.load() || powerOffHeld()) return false;
   densVal_.store(density);
   densReq_.store(true);
   return true;
 }
 bool FoggerBle::requestFan(uint8_t fan) {
-  if (!connected() || startsInhibited_.load()) return false;
+  if (!connected() || startsInhibited_.load() || powerOffHeld()) return false;
   fanVal_.store(static_cast<uint32_t>(fan));
   fanReq_.store(true);
   return true;
+}
+bool FoggerBle::requestPowerOff() {
+  // Connect-gated like START: latched across a drop, it would switch the
+  // machine off again the next time someone powers it on.
+  if (!connected()) return false;
+  powerOffAtMs_.store(millis());
+  powerOffHold_.store(true);
+  runIntent_.store(kRunStop);  // fog still ends if the power-off write never lands
+  powerOffReq_.store(true);
+  // The link may have dropped (and been torn down) since the check above: don't
+  // leave a power-off waiting for the next connection. The STOP may stay.
+  if (!connected()) {
+    clearPowerOff();
+    return false;
+  }
+  return true;
+}
+
+bool FoggerBle::powerOffHeld() const {
+  // Signed: the stamp may come from another task a moment after our millis().
+  return powerOffHold_.load() &&
+         (int32_t)(millis() - powerOffAtMs_.load()) < (int32_t)kPowerOffHoldMs;
+}
+
+void FoggerBle::clearPowerOff() {
+  powerOffReq_.store(false);
+  powerOffHold_.store(false);
 }
 
 bool FoggerBle::writeFrame(const uint8_t* buf, size_t len) {
@@ -555,6 +590,31 @@ void FoggerBle::serviceCommands() {
     uint8_t start = kRunStart;
     runIntent_.compare_exchange_strong(start, kRunStop);
   }
+  // Power-off first: its write carries the STOP. Like START it is dropped if it
+  // can't be written in time. If its write fails, the STOP latched with it is
+  // still tried below this pass.
+  if (powerOffReq_.load()) {
+    if ((int32_t)(millis() - powerOffAtMs_.load()) > (int32_t)kPowerOffWriteTtlMs) {
+      clearPowerOff();
+      log_w("fogger_ble: power-off not written in time; dropped (STOP still latched)");
+    } else if (writeFrame(buf, buildPowerOff(buf))) {
+      powerOffReq_.store(false);  // the hold stays until the link drops
+      uint8_t expected = kRunStop;
+      runIntent_.compare_exchange_strong(expected, kRunNone);
+      fogStopOwed_.store(false);
+      log_i("fogger_ble: power-off sent; the machine switches off in a few seconds");
+      return;
+    }
+  }
+  // While a power-off is held, this loop is the final arbiter: a START, density
+  // or fan that slipped past the request-side check (racing requestPowerOff on
+  // another task) is dropped here, never written.
+  const bool held = powerOffHeld();
+  if (held) {
+    uint8_t start = kRunStart;
+    runIntent_.compare_exchange_strong(start, kRunNone);
+  }
+
   const uint8_t intent = runIntent_.load();
 
   // STOP has priority and is retried: if its write fails, nothing else goes this
@@ -570,14 +630,15 @@ void FoggerBle::serviceCommands() {
   }
 
   // Density/fan: clear the latch BEFORE the write (exchange), and re-latch only
-  // on failure, so a newer value set during the write is not dropped.
-  if (densReq_.exchange(false)) {
+  // on failure, so a newer value set during the write is not dropped. Dropped
+  // while a power-off is held.
+  if (densReq_.exchange(false) && !held) {
     if (!writeFrame(buf, buildDensity(buf, densVal_.load()))) {
       densReq_.store(true);
       return;
     }
   }
-  if (fanReq_.exchange(false)) {
+  if (fanReq_.exchange(false) && !held) {
     if (!writeFrame(buf, buildFan(buf, static_cast<uint8_t>(fanVal_.load())))) {
       fanReq_.store(true);
       return;
@@ -588,8 +649,9 @@ void FoggerBle::serviceCommands() {
   // at the top (a STOP that arrived since must win, so don't re-read as START).
   if (intent == kRunStart && runIntent_.load() == kRunStart) {
     uint8_t expected = kRunStart;
-    if ((int32_t)(millis() - runIntentAtMs_.load()) > (int32_t)kStartWriteTtlMs) {
-      // Too stale (writes kept failing): drop it rather than ignite late.
+    if (powerOffHeld() ||
+        (int32_t)(millis() - runIntentAtMs_.load()) > (int32_t)kStartWriteTtlMs) {
+      // Switching off, or too stale (writes kept failing): drop it, never ignite.
       runIntent_.compare_exchange_strong(expected, kRunNone);
     } else if (writeFrame(buf, buildFogStart(buf))) {
       runIntent_.compare_exchange_strong(expected, kRunNone);

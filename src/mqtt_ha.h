@@ -1,14 +1,16 @@
 // mqtt_ha.h — MQTT client with Home Assistant MQTT Discovery.
 //
 // Publishes telemetry and (optionally) accepts commands, and advertises itself
-// to Home Assistant so entities appear automatically: a "Stop fog" button, a
-// fogging sensor, battery / charger / fault / RSSI sensors, and density / fan —
-// as a fog switch + sliders only when remote control is allowed, otherwise as
-// read-only sensors (the switch/sliders are then removed from HA).
+// to Home Assistant so entities appear automatically: "Stop fog" and "Power off
+// machine" buttons, a fogging sensor, battery / charger / fault / RSSI sensors,
+// and density / fan — as a fog switch + sliders only when remote control is
+// allowed, otherwise as read-only sensors (the switch/sliders are then removed
+// from HA).
 //
 // Safety: remote fog START, density and fan are honoured only when
 // allowRemoteIgnition is set, so an HA automation (or a broker repointed from
-// the LAN) cannot ignite or retune fog unattended. STOP is always accepted.
+// the LAN) cannot ignite or retune fog unattended. STOP and power-off end fog,
+// so they are always accepted.
 // Retained command messages (stale, replayed by the broker on subscribe) are
 // never acted on.
 //
@@ -52,7 +54,8 @@ class MqttHa {
   using FanFn = std::function<bool(uint8_t)>;
 
   // Wire before begin(); not changed afterwards.
-  void onCommands(FogFn fogStart, FogFn fogStop, DensityFn density, FanFn fan);
+  void onCommands(FogFn fogStart, FogFn fogStop, DensityFn density, FanFn fan,
+                  FogFn powerOff);
 
   // Start the client (no-op when disabled). Returns false on a config error or
   // if the client could not be started.
@@ -104,6 +107,7 @@ class MqttHa {
   FogFn fogStop_;
   DensityFn density_;
   FanFn fan_;
+  FogFn powerOff_;
 };
 
 }  // namespace fogger

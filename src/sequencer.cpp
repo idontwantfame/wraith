@@ -107,9 +107,9 @@ void Sequencer::stopLocked(const char* reason) {
   phase_ = SeqPhase::kIdle;
 }
 
-void Sequencer::stop() {
+void Sequencer::stop(const char* reason) {
   Lock lock(mutex_);
-  stopLocked("stopped");
+  stopLocked(reason);
 }
 
 void Sequencer::cancel() {

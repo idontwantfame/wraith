@@ -26,7 +26,7 @@ optional MQTT / Home Assistant integration over Wi-Fi.
 | `ota`, `ota_signing.h`, `fw_marker.h`, `fw_version` | Signature-checked OTA, the embedded build number, the downgrade floor. |
 | `config` | Settings in NVS behind one writer lock. |
 | `timekeeper` | SNTP, POSIX time zone, optional time-zone guess from the public IP. |
-| `main.cpp` | Wiring, the boot sequence, the serial console (`stop`, `x`, `status`). |
+| `main.cpp` | Wiring, the boot sequence, the serial console (`stop`, `x`, `status`, `poweroff`). |
 
 Hardware-facing work (BLE writes, Wi-Fi changes) happens only on the `loop()`
 task; other tasks hand requests over through mutex-guarded or atomic state.
@@ -55,6 +55,11 @@ task; other tasks hand requests over through mutex-guarded or atomic state.
 - Remote control over MQTT (start, density, fan) is off by default. Turning it
   on needs the device password. Stop is always accepted.
 - OTA is refused while fog runs or a stop is still pending.
+- Power-off (web, API, serial, MQTT) is sent only while connected, never after
+  a reconnect, so a machine someone just switched on is never switched straight
+  back off. It ends any program first and refuses starts until the link drops
+  (at most 15 s). Wraith never sends the `03 00` that cancels a switch-off, so
+  the machine's own power button keeps working.
 - **If the controller dies, the machine keeps fogging for about a minute.** In
   attended tests (2026-10-21), pulling the ESP32's power mid-fog left the
   machine spraying for roughly 60 s before it stopped by itself. Nothing on the
@@ -97,6 +102,7 @@ JSON bodies. `/ws` pushes the same JSON as `/api/status` about once a second.
 | POST | `/api/program/stop` | Cancel the program and stop |
 | GET | `/api/machines` | Discovered machines and the saved target |
 | POST | `/api/machine/select`, `/api/machine/disconnect` | `{"mac"}` / clear the target |
+| POST | `/api/machine/power_off` | Stop any program and switch the machine off (one-way: its own button switches it on) |
 | GET | `/api/wifi/scan` | Cached networks (`?force=1` rescans) |
 | POST | `/api/wifi/connect` | `{"ssid", "pass"}` |
 | POST | `/api/mqtt` | Broker settings; reboots. `device_password` is needed to allow remote control. |
@@ -118,10 +124,11 @@ device id is `wraith-xxxxxx` (from the chip's MAC).
 | `.../status` | device → broker | Availability: `online` / `offline` |
 | `.../fog/set` | broker → device | `ON` / `OFF` (`ON` only when remote control is allowed) |
 | `.../density/set`, `.../fan/set` | broker → device | Raw values as above (only when remote control is allowed) |
+| `.../power/set` | broker → device | `OFF` switches the machine off (always accepted, like stop) |
 
 Home Assistant discovery (`homeassistant/...`) follows the remote-control
-setting: when it is off, HA shows a Stop button and read-only sensors; when it
-is on, a fog switch and density / fan sliders appear as well.
+setting: when it is off, HA shows Stop and Power off buttons and read-only
+sensors; when it is on, a fog switch and density / fan sliders appear as well.
 
 ## Storage and flash layout (don't change)
 
@@ -148,5 +155,8 @@ Still to verify, with the machine on and someone watching it:
   the 2026-10-21 test showed the next pulse restarting fog).
 - Serial `stop` and `status` over USB (the console moved to the native USB
   port; before, it listened on UART0 pins and never answered over USB).
+- Power off from Wraith: the machine switches off within ~10 s and the link
+  drops; after a power-on with its own button, Wraith reconnects and fog
+  starts normally.
 - Phone onboarding through the captive portal on iOS and Android.
 - MQTT over WebSocket against a real broker listener.

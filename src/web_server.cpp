@@ -527,6 +527,14 @@ void WebServer::registerRoutes() {
     sendResult(req, true);
   });
 
+  // One-way: afterwards only the machine's own button powers it on, so the UI
+  // confirms first. A running program ends first so it can't fire again.
+  server_.on("/api/machine/power_off", HTTP_POST, [this](AsyncWebServerRequest* req) {
+    if (!guardMutation(req)) return;
+    if (deps_.seq != nullptr && deps_.seq->running()) deps_.seq->stop("powered off");
+    sendResult(req, deps_.fogger->requestPowerOff(), "not connected");
+  });
+
   // --- Wi-Fi scan + connect ---
   server_.on("/api/wifi/scan", HTTP_GET, [this](AsyncWebServerRequest* req) {
     if (!guardMutation(req)) return;  // ?force=1 is state-changing; also a read guard

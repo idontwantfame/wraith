@@ -88,6 +88,11 @@ void testCommandBuilders() {
   CHECK(buf[3] == fogger::kFanMin);
   fogger::buildFan(buf, 200);
   CHECK(buf[3] == fogger::kFanMax);
+
+  // Power off: the remote's switch-off write, byte for byte (stop, then 03 01).
+  const uint8_t powerOff[] = {0x55, 0xAA, 0x02, 0x55, 0xAA, 0x03, 0x01};
+  CHECK(fogger::buildPowerOff(buf) == sizeof(powerOff));
+  CHECK(std::memcmp(buf, powerOff, sizeof(powerOff)) == 0);
 }
 
 void testParseFrame() {

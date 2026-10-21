@@ -28,8 +28,12 @@ enum CmdId : uint8_t {
   kCmdFogStop = 0x02,   // verified: all off
   kCmdDensity = 0x04,   // payload: u32 big-endian
   kCmdFan = 0x05,       // payload: value, second-param (0x64)
-  // 0x03 is a decoded standby run-flag (no spray). Intentionally unused.
+  // 0x03 01 is the remote's switch-off request; only sent inside buildPowerOff().
+  // 0x03 00 cancels a pending switch-off: never sent, so the machine's own
+  // power button keeps working while we are connected.
+  kCmdPower = 0x03,
 };
+constexpr uint8_t kPowerOffArg = 0x01;
 
 // Verified useful ranges (remote min/middle/max).
 constexpr uint32_t kDensityMin = 8000;
@@ -70,6 +74,15 @@ inline size_t buildFan(uint8_t* out, uint8_t fan) {
   out[3] = fan;
   out[4] = kFanSecondParam;
   return 5;
+}
+// What the original remote writes when it is switched off: STOP, then 03 01,
+// in one write. The machine switches itself off a few seconds later and can
+// then only be powered on with its own button.
+inline size_t buildPowerOff(uint8_t* out) {
+  const size_t stopLen = buildFogStop(out);
+  out[stopLen] = kCmdHdr0; out[stopLen + 1] = kCmdHdr1;
+  out[stopLen + 2] = kCmdPower; out[stopLen + 3] = kPowerOffArg;
+  return stopLen + 4;
 }
 
 // ---- Status frame -----------------------------------------------------------

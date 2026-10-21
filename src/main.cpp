@@ -99,6 +99,13 @@ void maybeAutoGuessTimezone() {
   startTzGuess();
 }
 
+// Serial and MQTT power-off (the web route does the same through its deps).
+// A running program ends first, so it can't fire again.
+bool powerOffMachine() {
+  if (g_seq.running()) g_seq.stop("powered off");
+  return g_fogger.requestPowerOff();
+}
+
 void pollSerial() {
   while (Serial.available() > 0) {
     char c = (char)Serial.read();
@@ -117,8 +124,13 @@ void pollSerial() {
         Serial.printf("link=%s fog=%d batt=%u%% ip=%s\n", fogger::linkStateName(s.link),
                       s.status.isFogging(), s.status.batteryMin(),
                       g_wifi.status().ip.c_str());
+      } else if (g_line == "poweroff") {
+        Serial.println(powerOffMachine()
+                           ? F("-> power-off queued; the machine switches off in a few seconds")
+                           : F("-> rejected (not connected)"));
       } else if (g_line.length() > 0) {
-        Serial.println(F("serial: 'stop'/'x' or 'status' (full control is in the web UI)"));
+        Serial.println(
+            F("serial: 'stop'/'x', 'status' or 'poweroff' (full control is in the web UI)"));
       }
       g_line = "";
     } else if (g_line.length() < 32) {
@@ -229,7 +241,8 @@ void setup() {
       // (async task preempting the MQTT task) can't leave a program running.
       [] { g_seq.stop(); return g_fogger.requestFogStop(); },
       [](uint32_t d) { return g_fogger.requestDensity(d); },
-      [](uint8_t f) { return g_fogger.requestFan(f); });
+      [](uint8_t f) { return g_fogger.requestFan(f); },
+      [] { return powerOffMachine(); });
   g_mqtt.begin(mcfg);
 
   // Fan telemetry out to every consumer from the loop thread.

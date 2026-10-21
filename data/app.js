@@ -132,6 +132,7 @@ const PROGRAM_ENDED = {
   "machine did not start": "Last program ended: the machine did not start a pulse.",
   "link lost": "Last program ended: the machine link was lost.",
   "runtime cap": "Last program ended at the 2-hour limit.",
+  "powered off": "Last program ended: the machine was powered off.",
 };
 
 // Signal as 0-4 bars from dBm (a percentage would suggest precision there
@@ -472,6 +473,15 @@ $("btnMachineDisconnect").addEventListener("click", async () => {
   const r = await api("/api/machine/disconnect", "POST");
   toast(r.ok ? "Disconnected" : "Failed: " + (r.error || "?"), !r.ok);
   loadMachines();
+});
+// One-way: nothing over BLE can switch the machine back on.
+$("btnMachinePowerOff").addEventListener("click", async () => {
+  if (!confirm("Power off the fog machine? Only its own button can switch it on again.")) return;
+  const r = await api("/api/machine/power_off", "POST");
+  toast(
+    r.ok ? "Power-off sent; the machine switches off in a few seconds" : "Failed: " + (r.error || "?"),
+    !r.ok
+  );
 });
 
 // --- wi-fi -------------------------------------------------------------------

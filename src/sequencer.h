@@ -38,7 +38,7 @@ struct SeqStatus {
   uint32_t elapsedMs = 0;
   // Why the last program ended: "" (none since boot or still running),
   // "completed", "stopped", "taken over" (manual / MQTT control), "link lost",
-  // "runtime cap", "machine stopped", "machine did not start".
+  // "runtime cap", "machine stopped", "machine did not start", "powered off".
   const char* lastStop = "";
 };
 
@@ -61,8 +61,9 @@ class Sequencer {
   // Start a (clamped) program. Returns false if commands are not wired or the
   // machine is not connected (so the UI reports an honest failure).
   bool start(const FogProgram& program);
-  // Stop the program and send a fog STOP.
-  void stop();
+  // Stop the program and send a fog STOP. `reason` (a string literal) becomes
+  // status().lastStop when a program was running.
+  void stop(const char* reason = "stopped");
   // Stop timing WITHOUT sending a command (manual/MQTT control took over).
   void cancel();
   void loop();
