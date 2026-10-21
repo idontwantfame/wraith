@@ -36,7 +36,7 @@ body {
   z-index: 5;
 }
 
-.topbar-right { display: flex; align-items: center; gap: 12px; }
+.topbar-right { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
 .clock { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .brand { font-weight: 700; letter-spacing: 1px; font-size: 20px; }
 .brand-sub { display: block; font-size: 11px; font-weight: 400; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; }
@@ -51,13 +51,42 @@ body {
 .pill-ok { background: rgba(46, 204, 113, 0.15); color: var(--ok); border-color: transparent; }
 .pill-warn { background: rgba(245, 166, 35, 0.15); color: var(--warn); border-color: transparent; }
 .pill-muted { color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Signal bars (app.js setSignal): four bars, lit up to the level, in the
+   colour of what they sit in (the BLE pill, or muted text for Wi-Fi). */
+.sig { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
+.sig i { display: block; width: 3px; border-radius: 1px; background: currentColor; opacity: 0.25; }
+.sig i:nth-child(1) { height: 25%; }
+.sig i:nth-child(2) { height: 50%; }
+.sig i:nth-child(3) { height: 75%; }
+.sig i:nth-child(4) { height: 100%; }
+.sig.lvl-1 i:nth-child(-n + 1),
+.sig.lvl-2 i:nth-child(-n + 2),
+.sig.lvl-3 i:nth-child(-n + 3),
+.sig.lvl-4 i { opacity: 1; }
+#sigWifi { color: var(--muted); align-items: center; }
+#sigWifi[data-label]::before {
+  content: attr(data-label);
+  font-size: 11px;
+  margin-right: 4px;
+  align-self: center;
+}
+/* Keep the top bar on one line on phones. */
+@media (max-width: 420px) {
+  .topbar { padding: 12px 14px; }
+  .topbar-right { gap: 8px; }
+  .brand-sub { display: none; }
+  .pill { padding: 6px 10px; }
+}
+@media (max-width: 360px) {
+  #sigWifi[data-label]::before { display: none; }
+}
 
 .fault-banner {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 50;
+  /* In the page flow, under the top bar: it must not cover the connection
+     state, and an informational report can stay up for a long time. */
+  position: relative;
   /* A notice, not an alarm: report values are not all faults (app.js). */
   background: var(--warn);
   color: #1a1205;

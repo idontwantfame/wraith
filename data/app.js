@@ -127,20 +127,44 @@ function describeReport(hex) {
 
 // Why the last program ended (program.last_stop), when worth saying.
 const PROGRAM_ENDED = {
-  completed: "last program completed",
-  "machine stopped": "last program ended: the machine stopped fog",
-  "machine did not start": "last program ended: the machine did not start a pulse",
-  "link lost": "last program ended: machine link lost",
-  "runtime cap": "last program ended: 2-hour limit",
+  completed: "Last program completed.",
+  "machine stopped": "Last program ended: the machine stopped fog (its button or protection).",
+  "machine did not start": "Last program ended: the machine did not start a pulse.",
+  "link lost": "Last program ended: the machine link was lost.",
+  "runtime cap": "Last program ended at the 2-hour limit.",
 };
+
+// Signal as 0-4 bars from dBm (a percentage would suggest precision there
+// isn't). Each list holds the minimum dBm for 4, 3, 2 and 1 bars.
+const WIFI_BAR_DBM = [-60, -67, -75, -85];
+const BLE_BAR_DBM = [-65, -75, -85, -95];
+
+function signalBars(rssi, minDbm) {
+  if (!rssi) return 0;
+  const i = minDbm.findIndex((m) => rssi >= m);
+  return i < 0 ? 0 : 4 - i;
+}
+
+// rssi 0 means "no signal to show"; `idle` is then the tooltip.
+function setSignal(id, rssi, minDbm, label, idle) {
+  const el = $(id);
+  el.className = "sig lvl-" + signalBars(rssi, minDbm);
+  el.title = rssi ? `${label}: ${rssi} dBm` : `${label}: ${idle}`;
+  el.setAttribute("aria-label", el.title);
+}
 
 function renderStatus(d) {
   if (!d || !d.ble) return;
   const b = d.ble;
 
-  const pill = $("linkPill");
-  pill.textContent = b.connected ? "BLE live" : "BLE " + b.link;
-  pill.className = "pill " + (b.connected ? "pill-ok" : "pill-warn");
+  $("linkText").textContent = b.connected ? "BLE live" : "BLE " + b.link;
+  $("linkPill").className = "pill " + (b.connected ? "pill-ok" : "pill-warn");
+  setSignal("sigBle", b.connected ? b.rssi : 0, BLE_BAR_DBM, "Machine signal", "not connected");
+  if (d.wifi) {
+    const joined = Boolean(d.wifi.bssid);  // set only while joined to a network
+    setSignal("sigWifi", joined ? d.wifi.rssi : 0, WIFI_BAR_DBM, "Wi-Fi signal",
+              d.wifi.portal ? "setup access point" : "not connected");
+  }
 
   setStat("sFog", b.valid ? (b.fogging ? "On" : "Off") : "…", b.fogging ? "on" : "");
   // Reflect running state on the START button (unless the user is mid-arm).
@@ -178,7 +202,8 @@ function renderStatus(d) {
     if (b.density) applySlider("density", "densityOut", densToPct(b.density), (v) => v + "%");
     if (b.fan) applySlider("fan", "fanOut", b.fan, (v) => v + "%");
   }
-  $("curTarget").textContent = b.target || "none";
+  $("curTarget").textContent =
+    (b.target || "none") + (b.connected && b.rssi ? ` · ${b.rssi} dBm` : "");
 
   if (d.wifi) {
     const w = d.wifi;
@@ -195,7 +220,11 @@ function renderStatus(d) {
       ? `${p.phase} · pulse ${p.cycle}${p.repeats ? "/" + p.repeats : ""} · ${Math.ceil(
           p.phase_remaining_ms / 1000
         )}s`
-      : "idle" + (PROGRAM_ENDED[p.last_stop] ? " · " + PROGRAM_ENDED[p.last_stop] : "");
+      : "idle";
+    // Why the last program ended, on its own line (not while one is running).
+    const ended = $("progEnded");
+    ended.textContent = PROGRAM_ENDED[p.last_stop] || "";
+    ended.hidden = p.running || !ended.textContent;
   }
 
   if (d.mqtt) {

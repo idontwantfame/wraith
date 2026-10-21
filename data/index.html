@@ -14,7 +14,11 @@
     <div class="brand">Wraith<span class="brand-sub">fog controller</span></div>
     <div class="topbar-right">
       <span id="clock" class="clock">…</span>
-      <div id="linkPill" class="pill pill-muted">…</div>
+      <span id="sigWifi" class="sig lvl-0" data-label="Wi-Fi" title="Wi-Fi signal" role="img"
+            aria-label="Wi-Fi signal"><i></i><i></i><i></i><i></i></span>
+      <div id="linkPill" class="pill pill-muted"><span id="linkText">…</span><span
+           id="sigBle" class="sig lvl-0" title="Machine signal" role="img"
+           aria-label="Machine signal"><i></i><i></i><i></i><i></i></span></div>
     </div>
   </header>
 
@@ -50,6 +54,7 @@
 
       <div class="control-row">
         <label>Modes / timer <span id="progState" class="meta">idle</span></label>
+        <p id="progEnded" class="hint" hidden></p>
         <div class="presets">
           <button class="chip" data-on="5" data-off="5" data-rep="5">Pulse 5×</button>
           <button class="chip" data-on="1" data-off="1" data-rep="10">Strobe</button>

@@ -18,6 +18,7 @@ Wi-Fi, timed fog programs, and an optional Home Assistant integration over MQTT.
 - Timed programs: fog on X seconds, off Y, repeated N times (or until stopped),
   with a 60 s per-pulse and 2-hour total cap.
 - Finds machines nearby and remembers the one you pick; reconnects on its own.
+- Signal bars for Wi-Fi and the machine link in the top bar (dBm on hover).
 - Wi-Fi setup through a captive portal on its own WPA2 access point.
 - Home Assistant discovery over MQTT. Remote start is off unless you allow it.
 - Signed over-the-air updates with downgrade protection.

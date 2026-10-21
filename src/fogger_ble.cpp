@@ -16,6 +16,7 @@ namespace {
 
 constexpr size_t kMaxCmdBytes = 8;       // longest frame is the 7-byte density
 constexpr uint32_t kScanRestartMs = 12000;  // re-arm scan if nothing is found
+constexpr uint32_t kRssiPollMs = 2000;      // live-link signal refresh while connected
 constexpr bool kWriteWithResponse = true;   // protocol uses Write Request
 
 // Mutually-exclusive run intent (single atomic so the last writer wins).
@@ -151,6 +152,7 @@ void FoggerBle::loop() {
         break;
       }
       serviceCommands();
+      pollLinkRssi(now);
       break;
   }
 
@@ -163,6 +165,20 @@ void FoggerBle::loop() {
       statusCb_(snap);
     }
   }
+}
+
+// While connected, refresh the signal from the live link. The advertisement
+// RSSI seen when connecting goes stale as soon as the link is up. This is a
+// local query to the BLE controller (no radio traffic), so it doesn't delay
+// commands.
+void FoggerBle::pollLinkRssi(uint32_t now) {
+  if ((int32_t)(now - nextRssiPollMs_) < 0) return;  // wrap-safe
+  nextRssiPollMs_ = now + kRssiPollMs;
+  const int rssi = asClient(client_)->getRssi();
+  if (rssi == 0) return;  // query failed: keep the last value
+  portENTER_CRITICAL(&mux_);
+  rssi_ = rssi;
+  portEXIT_CRITICAL(&mux_);
 }
 
 void FoggerBle::startScan() {

@@ -18,7 +18,7 @@ optional MQTT / Home Assistant integration over Wi-Fi.
 | Module | Role |
 |---|---|
 | `fogger_protocol.h` | Wire protocol: command builders, status parser, stream reassembler. No Arduino dependencies, so it is host-tested. |
-| `fogger_ble` | NimBLE central: scan, connect / reconnect, commands queued and written from `loop()`, a latched STOP. |
+| `fogger_ble` | NimBLE central: scan, connect / reconnect, commands queued and written from `loop()`, a latched STOP; reads the live link's signal every 2 s. |
 | `sequencer` | Timed programs (on / off / repeat) with safety caps. |
 | `web_server` | ESPAsyncWebServer: the UI from LittleFS, `/api/*`, the `/ws` status push, the captive portal, signed OTA. |
 | `mqtt_ha`, `mqtt_settings.h` | ESP-IDF esp-mqtt client on its own task, Home Assistant discovery, settings validation (host-tested). |

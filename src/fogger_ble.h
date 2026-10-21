@@ -33,7 +33,8 @@ const char* linkStateName(LinkState state);
 struct FoggerSnapshot {
   LinkState link = LinkState::kIdle;
   bool connected = false;
-  int rssi = 0;               // last advertisement RSSI (dBm), 0 if unknown
+  int rssi = 0;               // signal (dBm): the live link while connected (read every
+                              // 2 s), else the last advertisement; 0 if unknown
   uint32_t lastStatusMs = 0;  // millis() when the last valid frame arrived, 0 if never
   uint32_t framesParsed = 0;  // total valid status frames since begin()
   StatusFrame status;         // last parsed telemetry (see .valid)
@@ -130,6 +131,7 @@ class FoggerBle {
   void stopBeforeDrop();                     // write STOP before abandoning a live link
   void handleDisconnect();                   // link teardown (loop() thread only)
   void serviceCommands();                    // write latched intents (loop only)
+  void pollLinkRssi(uint32_t now);           // refresh rssi_ from the live link (loop only)
   bool writeFrame(const uint8_t* buf, size_t len);  // one GATT write
   void recordDiscovered(const std::string& mac, const std::string& name, int rssi);
 
@@ -142,6 +144,7 @@ class FoggerBle {
   std::atomic<bool> foundTarget_{false};  // scan matched; connect on next loop()
   uint32_t nextScanAtMs_ = 0;     // backoff gate for the next scan attempt
   uint32_t scanStartedMs_ = 0;    // when the current scan began (restart guard)
+  uint32_t nextRssiPollMs_ = 0;   // next live-link signal read
   uint32_t publishedFrames_ = 0;  // framesParsed_ already handed to statusCb_
 
   // Latched command intents, serviced in loop() (GATT writes only from loop()).
