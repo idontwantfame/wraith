@@ -57,9 +57,11 @@ task; other tasks hand requests over through mutex-guarded or atomic state.
 - OTA is refused while fog runs or a stop is still pending.
 - Power-off (web, API, serial, MQTT) is sent only while connected, never after
   a reconnect, so a machine someone just switched on is never switched straight
-  back off. It ends any program first and refuses starts until the link drops
-  (at most 15 s). Wraith never sends the `03 00` that cancels a switch-off, so
-  the machine's own power button keeps working.
+  back off. It ends any program first. Until the link drops (at most 15 s), fog
+  start, density and fan are refused, and a program started meanwhile never
+  fogs (it ends as "machine did not start"). Wraith never sends `03 00`, which
+  the remote uses after the machine's own power control, so that control
+  should keep working (untested).
 - **If the controller dies, the machine keeps fogging for about a minute.** In
   attended tests (2026-10-21), pulling the ESP32's power mid-fog left the
   machine spraying for roughly 60 s before it stopped by itself. Nothing on the
@@ -158,5 +160,6 @@ Still to verify, with the machine on and someone watching it:
 - Power off from Wraith: the machine switches off within ~10 s and the link
   drops; after a power-on with its own button, Wraith reconnects and fog
   starts normally.
+- The machine's own power control with Wraith connected switches it off.
 - Phone onboarding through the captive portal on iOS and Android.
 - MQTT over WebSocket against a real broker listener.

@@ -28,9 +28,9 @@ enum CmdId : uint8_t {
   kCmdFogStop = 0x02,   // verified: all off
   kCmdDensity = 0x04,   // payload: u32 big-endian
   kCmdFan = 0x05,       // payload: value, second-param (0x64)
-  // 0x03 01 is the remote's switch-off request; only sent inside buildPowerOff().
-  // 0x03 00 cancels a pending switch-off: never sent, so the machine's own
-  // power button keeps working while we are connected.
+  // 0x03 01 follows STOP in the remote's switch-off; only sent inside
+  // buildPowerOff(). 0x03 00 (the remote sends it after the machine's own power
+  // control) is never sent, so we never cancel that control.
   kCmdPower = 0x03,
 };
 constexpr uint8_t kPowerOffArg = 0x01;

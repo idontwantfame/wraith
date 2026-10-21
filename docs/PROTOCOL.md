@@ -33,7 +33,7 @@ write can carry several commands back to back.
 | Fog stop | `55 aa 02` | Stops all output. Physically verified. |
 | Density | `55 aa 04 <u32 big-endian>` | 8000..40000. The remote's six levels: 8000, 15000, 25000, 30000, 35000, 40000. |
 | Fan | `55 aa 05 <fan> 64` | `fan` 35..100. The remote's six levels: 35, 48, 61, 74, 87, 100. The second byte is always 100 (`0x64`). |
-| Power off | `55 aa 02 55 aa 03 01` | Stop, then `03 01`, in one write: what the remote sends when it is switched off. Captured twice; both times the machine went off with the remote. Not yet tested from Wraith. See below. |
+| Power off | `55 aa 02 55 aa 03 01` | Stop, then `03 01`, in one write: what the remote sends when it is switched off. Captured twice (once with `55 aa 08 2c 00` appended); both times the user found the machine off. Not yet tested from Wraith. See below. |
 
 What the original remote sends for its buttons: a held Spray sends start, then
 stop on release; a double-click sends start, and the next press sends stop.
@@ -44,27 +44,33 @@ Always stop with an explicit `55 aa 02`; see "When the link drops" below.
 
 ### Power off (command `03`)
 
-Status byte 3 behaves as a pending switch-off; the LED turns red while it is
-set.
+Command `03` writes status byte 3. What byte 3 means is not resolved; this is
+what has been observed:
 
-- `03 01` requests a switch-off. After the remote's power-off write, status
-  frames carried on for about 7 s with byte 3 = 1, then the link ended. No
-  advertising followed until the machine's own button powered it on again, so
-  it really was off rather than just disconnected.
-- `03 00` cancels a pending switch-off. Pressing the machine's own power button
-  sets byte 3 to 1 too; with the original remote connected, the remote answered
-  with `03 00` and the machine stayed on. The remote also sends `03 00` right
-  after connecting (byte 3 reads 1 after a power-on).
-- A 1 s `03 01` followed by `03 00` only flashed the LED red, with no fog: `03`
-  is not a fog control and not a stop.
-- Nothing has woken a switched-off machine over BLE, so a power-off is one-way:
-  it needs the machine's own button to come back.
+- **The remote's power-off.** After its `02` + `03 01` write, status frames
+  carried on for about 7 s with byte 3 = 1, then ended, and the user found the
+  machine off. In the second capture the sniffer then saw no machine
+  advertising until the machine's own button powered it on again (an idle link
+  loss advertises for about a minute first).
+- **Byte 3 = 1 alone does not mean a switch-off is coming.** It is also set by
+  `03 01` on its own (the LED turns red), by the machine's own power control,
+  and right after a connection. Under Wraith it went back to 0 by itself a few
+  seconds after connecting, with no `03` sent and no switch-off.
+- **`03 00` clears it.** The remote sends it right after connecting. When the
+  machine's own power control was used with the remote connected, the remote
+  answered with `03 00` and the machine appeared to turn itself back on.
+- **Not a fog control.** A 1 s `03 01` followed by `03 00` on an idle machine
+  only flashed the LED red. Don't use `03` to start fog, nor as a stop.
+- **No wake.** Nothing has woken a switched-off machine over BLE so far, so
+  treat a power-off as one-way: the machine's own button brings it back.
 
-Wraith sends the remote's exact power-off write. It never sends `03 00`, so the
-machine's own power button keeps working while Wraith is connected.
+Wraith sends the 7-byte form as one Write Request (the remote uses Write
+Command; the machine accepts both). It never sends `03 00`, so the machine's own
+power control should work while Wraith is connected; that is not yet tested.
 
 Seen from the remote, or present in the machine's firmware, but **not**
 controls to use:
+
 - `08 <byte> 00`: the remote sends it about every 0.5 s; meaning not decoded.
   Not needed: fog runs of 30 s and 90 s without it behaved normally.
 - `01`, `06`: untested mode / timing fields.
@@ -83,7 +89,7 @@ reassemble from the byte stream and resync on `aa 55 14`
 | Offset | Field |
 |---|---|
 | 0..2 | `aa 55 14` header |
-| 3 | The command-03 field: a pending switch-off (see "Power off"). **Not** the fog state. |
+| 3 | The command-03 field; meaning unresolved (see "Power off"). **Not** the fog state. |
 | 4..7 | Density, u32 big-endian |
 | 8 | Fan |
 | 9 | Second fan parameter (100) |
@@ -137,8 +143,8 @@ still holds.
 
 - Runs longer than 90 s (no keepalive was needed up to then).
 - Power-off sent by Wraith (only the remote's has been captured).
-- Whether a machine that powers on with byte 3 = 1 needs the remote's `03 00`.
-  Wraith never sends it, and every Wraith test so far fogged normally.
+- The machine's own power control while Wraith is connected (Wraith never sends
+  the remote's `03 00`, so it should switch the machine off).
 - The actual output at each density / fan level.
 - The machine report bits other than `0x0200` against physical events (their
   meanings come from static analysis).

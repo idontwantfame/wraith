@@ -72,12 +72,14 @@ pio run -t upload       # build and flash the firmware (web UI included) over US
 ## Using it
 
 - **Control**: start (asks to confirm), stop, density, fan, and timed programs.
-- **Settings**: Wi-Fi, fog machine (pick, disconnect, power off), Home Assistant, device name (sets
-  `http://<name>.local`), time zone, firmware update, reboot and factory reset.
+- **Settings**: Wi-Fi, fog machine (pick, disconnect, power off), Home
+  Assistant, device name (sets `http://<name>.local`), time zone, firmware
+  update, reboot and factory reset.
 - **Home Assistant**: in Settings, enter your MQTT broker. Entities appear by
-  MQTT discovery: Stop and Power off buttons and read-only sensors by default. "Allow remote
-  fog START + density/fan" (needs the device password) adds a fog switch and
-  sliders, for automations you trust.
+  MQTT discovery: Stop and Power off buttons and read-only sensors by default.
+  "Allow remote fog START + density/fan" (needs the device password) adds a fog
+  switch and sliders, for automations you trust. Power off needs no permission:
+  anything that can publish to the broker can switch the machine off.
 - **Scripts**: see the HTTP API in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#http-api).
   For example, to stop:
   `curl -X POST -H 'X-Requested-With: fogger' http://wraith.local/api/fog/stop`
