@@ -1,6 +1,7 @@
 // web_server.h — async HTTP + WebSocket control surface.
 //
-// Serves the SPA from LittleFS, exposes a REST API (/api/*), pushes live status
+// Serves the SPA (compiled into the firmware from data/, gzipped), exposes a
+// REST API (/api/*), pushes live status
 // over a WebSocket (/ws), hosts the captive-portal redirect, and accepts web
 // OTA uploads. Command handlers latch thread-safe intents into the BLE layer.
 //

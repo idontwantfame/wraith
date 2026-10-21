@@ -3,17 +3,36 @@
 
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
-#include <LittleFS.h>
 #include <esp_timer.h>
 #include <mbedtls/x509_crt.h>
 
+#include <cstring>
+
 #include "fw_version.h"
+#include "web_assets.h"  // generated from data/ by tools/web_assets.py
 
 namespace fogger {
 namespace {
 
 void sendJson(AsyncWebServerRequest* req, int code, const std::string& body) {
   req->send(code, "application/json", body.c_str());
+}
+
+// The web UI is compiled into the firmware, gzipped (tools/web_assets.py), so it
+// is covered by the image signature and always matches the firmware.
+void sendAsset(AsyncWebServerRequest* req, const web::Asset& asset) {
+  AsyncWebServerResponse* res =
+      req->beginResponse(200, asset.contentType, asset.gzip, asset.gzipLen);
+  res->addHeader("Content-Encoding", "gzip");
+  res->addHeader("Cache-Control", "no-cache");  // revalidate: it changes with each update
+  req->send(res);
+}
+
+const web::Asset& indexAsset() {
+  for (size_t i = 0; i < web::kAssetCount; ++i) {
+    if (std::strcmp(web::kAssets[i].path, "/index.html") == 0) return web::kAssets[i];
+  }
+  return web::kAssets[0];  // unreachable: the generator requires index.html
 }
 
 // Lowercase host, with any :port stripped.
@@ -764,12 +783,21 @@ void WebServer::registerRoutes() {
         }
       });
 
-  // --- Static SPA + captive portal ---
-  // Foreign-Host requests on the softAP skip the static files and fall through
-  // to onNotFound, which redirects them to our own address.
-  server_.serveStatic("/", LittleFS, "/")
-      .setDefaultFile("index.html")
-      .setFilter([this](AsyncWebServerRequest* req) { return !needsPortalRedirect(req); });
+  // --- Web UI (built into the firmware) + captive portal ---
+  // Foreign-Host requests on the softAP skip these routes and fall through to
+  // onNotFound, which redirects them to our own address.
+  const auto notPortalRedirect = [this](AsyncWebServerRequest* req) {
+    return !needsPortalRedirect(req);
+  };
+  for (size_t i = 0; i < web::kAssetCount; ++i) {
+    const web::Asset* asset = &web::kAssets[i];
+    server_.on(asset->path, HTTP_GET, [asset](AsyncWebServerRequest* req) {
+      sendAsset(req, *asset);
+    }).setFilter(notPortalRedirect);
+  }
+  server_.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
+    sendAsset(req, indexAsset());
+  }).setFilter(notPortalRedirect);
   server_.onNotFound([this](AsyncWebServerRequest* req) {
     // Unknown API paths are real 404s, not the SPA (don't mask typos/errors).
     if (req->url().startsWith("/api/")) {
@@ -785,13 +813,7 @@ void WebServer::registerRoutes() {
     }
     // Serve the UI (HTTP 200) for any other unknown path: the SPA client-routing
     // fallback.
-    if (LittleFS.exists("/index.html")) {
-      req->send(LittleFS, "/index.html", "text/html");
-    } else if (deps_.wifi->isPortal()) {
-      req->redirect(("http://" + deps_.wifi->status().ip + "/").c_str());
-    } else {
-      req->send(404, "text/plain", "not found");
-    }
+    sendAsset(req, indexAsset());
   });
 }
 

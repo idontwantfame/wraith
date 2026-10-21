@@ -30,6 +30,5 @@ jobs:
           path: |
             .pio/build/esp32c3/firmware.bin
             .pio/build/esp32c3/firmware.factory.bin
-            .pio/build/esp32c3/littlefs.bin
           if-no-files-found: error
           retention-days: 14

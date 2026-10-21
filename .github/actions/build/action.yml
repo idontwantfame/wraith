@@ -1,5 +1,5 @@
 name: Test and build
-description: Set up a pinned PlatformIO, run the host tests, build the firmware and the web UI image.
+description: Set up a pinned PlatformIO, run the host tests, build the firmware (web UI included).
 
 inputs:
   cache:
@@ -33,8 +33,6 @@ runs:
       shell: bash
       run: node --check data/app.js
 
-    - name: Build firmware and web UI image
+    - name: Build the firmware (web UI included)
       shell: bash
-      run: |
-        pio run
-        pio run -t buildfs
+      run: pio run

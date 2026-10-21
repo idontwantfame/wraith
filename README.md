@@ -52,8 +52,7 @@ Install [PlatformIO Core](https://platformio.org/install/cli) (or the
 PlatformIO IDE extension for VS Code), then from the repo root:
 
 ```
-pio run -t upload       # build and flash the firmware over USB
-pio run -t uploadfs     # flash the web UI
+pio run -t upload       # build and flash the firmware (web UI included) over USB
 ```
 
 ## First setup
@@ -84,8 +83,8 @@ pio run -t uploadfs     # flash the web UI
 ## Updating over Wi-Fi
 
 The device only installs firmware signed with the project's key, and refuses
-an older build than it has run. Over Wi-Fi only the firmware changes; the web
-UI changes over USB (`pio run -t uploadfs`), or with a factory image.
+an older build than it has run. The web UI is built into the firmware, so an
+update brings both.
 
 - **A release**: in Settings → Firmware update, pick
   `wraith-<version>-firmware.bin` and its `.sig`.
@@ -98,8 +97,7 @@ UI changes over USB (`pio run -t uploadfs`), or with a factory image.
 
 ```
 pio run                            # build (stamps the build number, signs if the key is present)
-pio run -t upload                  # flash the firmware over USB
-pio run -t uploadfs                # flash the web UI (data/) over USB
+pio run -t upload                  # flash the firmware (web UI included) over USB
 pio run -t ota                     # build, sign and install over Wi-Fi
 pio test -e native -e native_tls   # host unit tests
 pio device monitor                 # serial console: logs, `stop`, `status`
@@ -115,9 +113,9 @@ pio device monitor                 # serial console: logs, `stop`, `status`
   | Path | What |
   |---|---|
   | `src/`, `include/` | Firmware (modules are described in [ARCHITECTURE.md](docs/ARCHITECTURE.md)) |
-  | `data/` | Web UI, served from LittleFS |
-  | `test/` | Host unit tests (protocol, MQTT settings) |
-  | `tools/` | Build-number stamping, OTA signing and upload, release packaging |
+  | `data/` | Web UI; compiled into the firmware, gzipped, at build time |
+  | `test/` | Host unit tests (protocol, MQTT settings, program watch) |
+  | `tools/` | Build-number stamping, web UI embedding, OTA signing and upload, release packaging |
   | `docs/` | [The BLE protocol](docs/PROTOCOL.md) and [architecture, safety and interfaces](docs/ARCHITECTURE.md) |
 
 ### Signing
@@ -140,9 +138,9 @@ Pushing a tag `vX.Y.Z` (`vX.Y.Z-rc.N` for a pre-release) on a commit in
 `main` runs the [release workflow](.github/workflows/release.yml). Tag with a
 message: `git tag -a v1.0.0 -m v1.0.0 && git push origin v1.0.0`.
 
-1. Runs the tests and builds the firmware and the web UI image from fresh
+1. Runs the tests and builds the firmware (web UI included) from fresh
    downloads (no cache, no secrets).
-2. Packages the factory, firmware and web UI images and the public key, and
+2. Packages the factory and firmware images and the public key, and
    writes the release notes: install instructions plus a changelog from the
    commit messages since the previous tag ([git-cliff](https://git-cliff.org),
    `cliff.toml`).

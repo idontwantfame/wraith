@@ -1,15 +1,14 @@
 // main.cpp — Wraith controller entry point.
 //
-// Boot order: LittleFS -> Config(NVS) -> BLE central -> Wi-Fi (STA/portal) ->
-// web server -> MQTT/Home Assistant. The BLE status callback fans telemetry out
-// to the web WebSocket and to MQTT. A tiny serial fallback keeps a STOP within
-// reach during bench work.
+// Boot order: Config(NVS) -> BLE central -> Wi-Fi (STA/portal) -> web server
+// (the UI is compiled into the firmware) -> MQTT/Home Assistant. The BLE status
+// callback fans telemetry out to the web WebSocket and to MQTT. A tiny serial
+// fallback keeps a STOP within reach during bench work.
 //
-// Safety (see firmware/README.md "Boundaries"): never auto-starts fog on boot;
+// Safety (see docs/ARCHITECTURE.md): never auto-starts fog on boot;
 // remote fog START over MQTT is gated by mqtt.allowRemoteIgnition; the web UI
 // requires an explicit confirm; STOP is always one action.
 #include <Arduino.h>
-#include <LittleFS.h>
 
 #include "config.h"
 #include "fogger_ble.h"
@@ -140,11 +139,6 @@ void setup() {
   delay(200);
   Serial.println(F("\nWraith controller booting…"));
 
-  // Do NOT auto-format on a mount failure: a transient error would erase the web
-  // assets. Flash them with `pio run -t uploadfs` if the UI is missing.
-  if (!LittleFS.begin(/*formatOnFail=*/false)) {
-    Serial.println(F("WARN: LittleFS mount failed; run 'pio run -t uploadfs'"));
-  }
   if (!g_config.begin()) {
     Serial.println(F("WARN: config/NVS unavailable; using defaults"));
   }

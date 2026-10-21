@@ -1,4 +1,6 @@
-# ESP32-C3 (4MB) OTA layout: two 1.8MB app slots + NVS + OTA-data + LittleFS + coredump.
+# ESP32-C3 (4MB) OTA layout: two 1.8MB app slots + NVS + OTA-data + a file-system
+# partition (unused since the web UI moved into the firmware; kept, as OTA can't
+# change the layout of devices in the field) + coredump.
 # The full BLE+Wi-Fi+web+MQTT image is ~1.65MB, so each OTA slot is 0x1C0000 (1.8MB).
 # Name,     Type, SubType,  Offset,   Size,     Flags
 nvs,        data, nvs,      0x9000,   0x5000,

@@ -20,7 +20,7 @@ optional MQTT / Home Assistant integration over Wi-Fi.
 | `fogger_protocol.h` | Wire protocol: command builders, status parser, stream reassembler. No Arduino dependencies, so it is host-tested. |
 | `fogger_ble` | NimBLE central: scan, connect / reconnect, commands queued and written from `loop()`, a latched STOP; reads the live link's signal every 2 s. |
 | `sequencer` | Timed programs (on / off / repeat) with safety caps. |
-| `web_server` | ESPAsyncWebServer: the UI from LittleFS, `/api/*`, the `/ws` status push, the captive portal, signed OTA. |
+| `web_server` | ESPAsyncWebServer: the UI (compiled into the firmware from `data/` by `tools/web_assets.py`, served gzipped), `/api/*`, the `/ws` status push, the captive portal, signed OTA. |
 | `mqtt_ha`, `mqtt_settings.h` | ESP-IDF esp-mqtt client on its own task, Home Assistant discovery, settings validation (host-tested). |
 | `wifi_mgr` | Station mode with a WPA2 setup access point as fallback, captive portal, mDNS. Joins the strongest access point of the network (full scan, sorted by signal); no roaming afterwards. |
 | `ota`, `ota_signing.h`, `fw_marker.h`, `fw_version` | Signature-checked OTA, the embedded build number, the downgrade floor. |
@@ -127,10 +127,12 @@ is on, a fog switch and density / fan sliders appear as well.
 
 - NVS namespace `ulface`: the project's original name. Renaming it would orphan
   every saved setting on existing devices.
-- `partitions_ota.csv` (4 MB): NVS, OTA data, two 1.8 MB app slots, LittleFS
-  (must stay labelled `spiffs`, at `0x390000`), core dump.
-- The web UI lives on LittleFS and changes only by USB (`pio run -t uploadfs`)
-  or a factory image; OTA replaces the app alone.
+- `partitions_ota.csv` (4 MB): NVS, OTA data, two 1.8 MB app slots, a
+  file-system partition (`spiffs`, at `0x390000`), core dump. OTA can't change
+  the partition table on devices in the field, so keep it as it is.
+- The web UI is part of the firmware image, so it is signed with it and
+  updated with it. The file-system partition is unused (older builds served
+  the UI from it).
 
 ## Hardware checks
 
