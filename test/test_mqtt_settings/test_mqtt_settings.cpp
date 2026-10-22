@@ -102,6 +102,37 @@ MqttSettings base() {
   return s;
 }
 
+void testPasswordCarriesOver() {
+  const MqttSettings a = base();
+  MqttSettings b = base();
+  CHECK(fogger::passwordCarriesOver(a, b));
+
+  // Same host and user: a new port, path or a plain -> WebSocket switch keeps it,
+  // so moving to another listener of the same broker needs no retyping.
+  b = base(); b.port = 1884; b.transport = "ws";
+  CHECK(fogger::passwordCarriesOver(a, b));
+  b.path = "/other";                 CHECK(fogger::passwordCarriesOver(a, b));
+  b = base(); b.transport = "mqtts"; b.port = 8883;
+  CHECK(fogger::passwordCarriesOver(a, b));  // plain -> TLS is stronger
+
+  // Never to another host or user.
+  b = base(); b.host = "10.0.0.1";   CHECK(!fogger::passwordCarriesOver(a, b));
+  b = base(); b.user = "other";      CHECK(!fogger::passwordCarriesOver(a, b));
+
+  // Never from TLS to plain (it would travel in the clear), nor to a TLS setup
+  // that trusts another CA or newly skips the host-name check.
+  MqttSettings ta = base(); ta.transport = "mqtts"; ta.caPem = "CA1";
+  MqttSettings tb = ta;      tb.transport = "mqtt";
+  CHECK(!fogger::passwordCarriesOver(ta, tb));
+  tb = ta; tb.transport = "ws";      CHECK(!fogger::passwordCarriesOver(ta, tb));
+  tb = ta; tb.transport = "wss";     CHECK(fogger::passwordCarriesOver(ta, tb));
+  tb = ta; tb.caPem = "CA2";         CHECK(!fogger::passwordCarriesOver(ta, tb));
+  tb = ta; tb.skipHostnameCheck = true;
+  CHECK(!fogger::passwordCarriesOver(ta, tb));
+  MqttSettings sa = ta; sa.skipHostnameCheck = true;
+  CHECK(fogger::passwordCarriesOver(sa, ta));  // turning the check back on is fine
+}
+
 void testBrokerIdentity() {
   const MqttSettings a = base();
   MqttSettings b = base();
@@ -157,6 +188,7 @@ int main() {
   testBaseTopic();
   testCaPemShape();
   testBrokerIdentity();
+  testPasswordCarriesOver();
   testCaPemRejectsKeys();
   if (g_failures == 0) {
     std::printf("OK: all MQTT settings tests passed\n");

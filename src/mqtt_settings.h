@@ -102,6 +102,20 @@ inline bool sameBrokerAccount(const MqttSettings& a, const MqttSettings& b) {
   return true;
 }
 
+// Whether the stored password may be kept when settings are saved with the
+// password field blank. Separate from sameBrokerAccount (which also decides the
+// ignition scope): the same host and user, and never onto a weaker transport.
+// TLS -> plain would send it in the clear, and over TLS it is only as safe as
+// the server check (same CA, host-name check not newly skipped). Port and
+// WebSocket path may change: another listener of the same broker needs no
+// retyping.
+inline bool passwordCarriesOver(const MqttSettings& cur, const MqttSettings& next) {
+  if (cur.host != next.host || cur.user != next.user) return false;
+  if (!mqttTransportIsTls(cur.transport)) return true;    // from plain: never weaker
+  if (!mqttTransportIsTls(next.transport)) return false;  // TLS -> plain
+  return cur.caPem == next.caPem && (cur.skipHostnameCheck || !next.skipHostnameCheck);
+}
+
 // Same ignition scope: same account, topic and TLS trust settings. Anything
 // else changes who can command the device (needs the device password while
 // remote ignition is allowed).

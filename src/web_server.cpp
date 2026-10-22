@@ -171,14 +171,14 @@ bool ignitionChangeAuthorized(JsonVariant& json, const MqttSettings& cur,
   return !apPassword.empty() && secretEquals(devicePass, apPassword);
 }
 
-// Keep the stored password when the field is blank, but ONLY for the same broker
-// account (host/port/user/transport/path): it is never sent to another broker or
-// over a weaker transport. clear_password forces empty.
+// Keep the stored password when the field is blank, but ONLY for the same host
+// and user and never over a weaker transport (passwordCarriesOver): it is never
+// sent to another broker or in the clear. clear_password forces empty.
 std::string resolveMqttPassword(JsonVariant& json, const std::string& typed,
                                 const MqttSettings& cur, const MqttSettings& next) {
   if (json["clear_password"] | false) return std::string();
   if (!typed.empty()) return typed;
-  return sameBrokerAccount(cur, next) ? cur.pass : std::string();
+  return passwordCarriesOver(cur, next) ? cur.pass : std::string();
 }
 
 }  // namespace

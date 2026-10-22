@@ -648,9 +648,9 @@ $("btnMqttSave").addEventListener("click", async () => {
   const r = await api("/api/mqtt", "POST", body);
   $("devicePass").value = "";
   if (r.ok && r.password_cleared) {
-    // Broker identity (host/port/user) changed with the password left blank:
-    // the old password was deliberately not kept for the new identity.
-    toast("Saved, rebooting. The stored password was cleared (broker/user changed): re-enter it", true);
+    // Host or user changed, or TLS was dropped or its trust relaxed, with the
+    // password left blank: the old password was deliberately not carried over.
+    toast("Saved, rebooting. The stored password was cleared (host, user or TLS changed): re-enter it", true);
   } else if (r.ok) {
     toast("Saved, rebooting…"); // the device reboots itself to apply
   } else {
