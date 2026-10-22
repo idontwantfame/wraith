@@ -194,6 +194,8 @@ Passed in attended tests on 2026-10-22 (builds 2610212053 to 2610221112):
   gave `0x0001`, then the machine switched itself off.
 - A continuous run of 3 min 41 s, steady, stopped promptly. The pack reading
   34% at the start was then flat.
+- Fog while the charger is connected (19 s, output flag correct), and at the
+  density / fan extremes (8000 / 35 and 40000 / 100).
 - MQTT over WebSocket against a real broker listener (state, HA buttons).
 - Phone onboarding through the open setup network: the sign-in page opened by
   itself (one phone).
@@ -208,7 +210,7 @@ Still to verify:
   and one unexplained restart right after joining; `/api/status` now reports
   the reset reason.
 - The 10-minute fallback window (needs the router unreachable).
-- Fog while charging; output at each density / fan level; how long a full
+- How visibly the output differs across density / fan levels; how long a full
   charge lasts.
 - Onboarding on both iOS and Android.
 

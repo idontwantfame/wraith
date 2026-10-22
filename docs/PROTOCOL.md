@@ -146,7 +146,8 @@ still holds.
 
 - Runs longer than 3 min 41 s, and how long a full charge lasts (no keepalive
   was needed up to then).
-- Fog while the charger is connected.
-- The actual output at each density / fan level.
+- How visibly the output differs across density / fan levels. The extremes
+  (8000 / 35 and 40000 / 100) are accepted and both fog (2026-10-22). Fog while
+  charging works, and the output flag tracks it (19 s run).
 - The machine report bits other than `0x0001`, `0x0008` and `0x0200` against
   physical events (their meanings come from static analysis).
