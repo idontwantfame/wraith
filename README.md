@@ -75,7 +75,10 @@ pio run -t upload       # build and flash the firmware (web UI included) over US
 ## Using it
 
 - **Control**: start (asks to confirm), stop, density, fan, and timed programs.
-- **Settings**: Wi-Fi, fog machine (pick, disconnect, power off), Home
+  The machine's last report shows as a banner above; × hides it until the
+  machine reports something else.
+- **Settings**: Wi-Fi (connect, or forget it to rerun setup), fog machine
+  (pick, disconnect, power off), Home
   Assistant, device name (sets `http://<name>.local`), time zone, firmware
   update, reboot and factory reset.
 - **Home Assistant**: in Settings, enter your MQTT broker. Entities appear by

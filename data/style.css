@@ -99,6 +99,24 @@ body {
 }
 .fault-banner.alarm { background: var(--danger); color: #230707; }
 .fault-banner[hidden] { display: none; }
+/* Room on both sides keeps the text centred with the close button at the right. */
+.fault-banner { padding-left: 44px; padding-right: 44px; }
+.banner-x {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+.banner-x:hover, .banner-x:focus-visible { background: rgba(0, 0, 0, 0.12); }
 
 .tabs {
   display: flex;

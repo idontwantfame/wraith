@@ -135,6 +135,25 @@ const PROGRAM_ENDED = {
   "powered off": "Last program ended: the machine was powered off.",
 };
 
+// The report word the user hid with ×; it stays hidden until the word changes.
+// Per browser; storage can be unavailable (private mode), so failures are fine.
+const kDismissedReportKey = "wraith.dismissedReport";
+let dismissedReport = "";
+try {
+  dismissedReport = localStorage.getItem(kDismissedReportKey) || "";
+} catch (e) {
+  /* no storage: a dismissal lasts until the page reloads */
+}
+function setDismissedReport(word) {
+  dismissedReport = word;
+  try {
+    if (word) localStorage.setItem(kDismissedReportKey, word);
+    else localStorage.removeItem(kDismissedReportKey);
+  } catch (e) {
+    /* see above */
+  }
+}
+
 // Signal as 0-4 bars from dBm (a percentage would suggest precision there
 // isn't). Each list holds the minimum dBm for 4, 3, 2 and 1 bars.
 const WIFI_BAR_DBM = [-60, -67, -75, -85];
@@ -188,11 +207,15 @@ function renderStatus(d) {
   // Machine report (status bytes 10..11): the machine latches its last events
   // there (not live state), and not every value is a fault. Amber for events
   // such as "oil tank connected", red when the machine refuses or stops fog.
-  // Never hidden.
+  // The × hides the current word (in this browser) until the word changes.
   const fb = $("faultBanner");
-  if (b.valid && b.fault && b.fault !== "0x0000") {
+  if (b.valid && dismissedReport && b.fault !== dismissedReport) {
+    setDismissedReport("");  // a new report: show it again
+  }
+  if (b.valid && b.fault && b.fault !== "0x0000" && b.fault !== dismissedReport) {
     const r = describeReport(b.fault);
-    fb.textContent = "Last machine report " + b.fault + ": " + r.text;
+    $("faultText").textContent = "Last machine report " + b.fault + ": " + r.text;
+    fb.dataset.word = b.fault;
     fb.classList.toggle("alarm", r.fault);
     fb.hidden = false;
   } else {
@@ -526,6 +549,19 @@ $("btnWifiConnect").addEventListener("click", async () => {
   if (!ssid) return toast("Enter an SSID", true);
   const r = await api("/api/wifi/connect", "POST", { ssid, pass: $("wifiPass").value });
   toast(r.ok ? "Connecting; the device may change IP" : "Rejected: " + (r.error || "?"), !r.ok);
+});
+$("btnWifiForget").addEventListener("click", async () => {
+  if (!confirm(
+      "Forget the saved Wi-Fi and restart in setup mode?\n\n" +
+      "Then join the wraith-… network (device password) to choose a network again. " +
+      "Other settings are kept.")) return;
+  const r = await api("/api/wifi/forget", "POST");
+  toast(r.ok ? "Restarting in setup mode: join the wraith-… network" : "Failed: " + (r.error || "?"), !r.ok);
+});
+
+$("faultDismiss").addEventListener("click", () => {
+  setDismissedReport($("faultBanner").dataset.word || "");
+  $("faultBanner").hidden = true;
 });
 
 // --- mqtt / home assistant ---------------------------------------------------

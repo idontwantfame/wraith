@@ -746,6 +746,19 @@ void WebServer::registerRoutes() {
     rebootPending_ = true;
     sendResult(req, true);
   });
+  // Forget the saved network and restart into the setup portal (onboarding a
+  // phone again, or moving to another network). Everything else is kept.
+  // Refused while fog runs, like OTA: the reboot would cut the machine link.
+  server_.on("/api/wifi/forget", HTTP_POST, [this](AsyncWebServerRequest* req) {
+    if (!guardMutation(req)) return;
+    if (fogBusy()) {
+      sendResult(req, false, "fog is running");
+      return;
+    }
+    const bool ok = deps_.config->clearWifi();
+    if (ok) rebootPending_ = true;
+    sendResult(req, ok, "could not clear the saved network");
+  });
   server_.on("/api/factory_reset", HTTP_POST, [this](AsyncWebServerRequest* req) {
     if (!guardMutation(req)) return;
     const bool ok = deps_.config->factoryReset();

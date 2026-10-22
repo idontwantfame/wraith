@@ -114,6 +114,7 @@ JSON bodies. `/ws` pushes the same JSON as `/api/status` about once a second.
 | POST | `/api/machine/power_off` | Stop any program and switch the machine off (one-way: its own button switches it on) |
 | GET | `/api/wifi/scan` | Cached networks (`?force=1` rescans) |
 | POST | `/api/wifi/connect` | `{"ssid", "pass"}` |
+| POST | `/api/wifi/forget` | Forget the saved network and restart into the setup access point; refused while fog runs |
 | POST | `/api/mqtt` | Broker settings; reboots. `device_password` is needed to allow remote control. |
 | POST | `/api/hostname`, `/api/time`, `/api/time/guess` | mDNS name; time zone and NTP server; time-zone guess |
 | POST | `/api/ota?sig=<url-encoded base64>` | Multipart upload of `firmware.bin` |
