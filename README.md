@@ -31,6 +31,9 @@ Wi-Fi, timed fog programs, and an optional Home Assistant integration over MQTT.
   USB (most small C3 boards). The serial console uses it. For a board with a
   USB-UART bridge chip instead, set `ARDUINO_USB_MODE` and
   `ARDUINO_USB_CDC_ON_BOOT` to 0 in `platformio.ini`.
+- Serial console in another terminal (not `pio device monitor`): leave DTR
+  and RTS on. Turning them off resets the board when the port opens, and a
+  reset while fogging leaves the machine spraying for about a minute.
 - The fog machine. It shows up as `CH9141BLE2U`. Switch its handheld remote
   off while Wraith is in charge: the remote reconnects and takes the link.
 
