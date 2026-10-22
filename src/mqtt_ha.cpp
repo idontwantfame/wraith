@@ -3,7 +3,11 @@
 
 #include <ArduinoJson.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <cstring>
+#include <new>
+#include <string_view>
 
 #include "esp_system.h"
 #include "fogger_protocol.h"
@@ -23,6 +27,9 @@ constexpr uint32_t kPublisherStackBytes = 6144;  // state JSON + publish
 // time-slices with loop() instead of starving it (esp-mqtt's default is 5).
 constexpr UBaseType_t kTaskPriority = 1;
 constexpr uint32_t kPublisherPollMs = 100;
+// Fresh telemetry goes out at most once a second: status frames arrive 4-10
+// times a second, and publishing each one churns the heap (and the broker).
+constexpr uint32_t kMinStatePublishMs = 1000;
 constexpr int kKeepaliveSec = 30;
 constexpr int kNetworkTimeoutMs = 10000;
 constexpr int kMaxCommandBytes = 64;  // our command payloads are tiny
@@ -53,9 +60,13 @@ esp_mqtt_transport_t transportFor(const std::string& t) {
   return MQTT_TRANSPORT_OVER_TCP;
 }
 
-std::string upper(std::string s) {
-  for (char& c : s) c = static_cast<char>(toupper((unsigned char)c));
-  return s;
+// Case-insensitive match against an upper-case word, without allocating.
+bool equalsWord(std::string_view s, std::string_view upperWord) {
+  if (s.size() != upperWord.size()) return false;
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (toupper(static_cast<unsigned char>(s[i])) != upperWord[i]) return false;
+  }
+  return true;
 }
 
 // Fill the fields every HA discovery config shares (identity + availability +
@@ -114,6 +125,10 @@ bool MqttHa::begin(const MqttHaConfig& cfg) {
     return false;
   }
   availTopic_ = deviceTopic("status");
+  fogSetTopic_ = deviceTopic("fog/set");
+  densitySetTopic_ = deviceTopic("density/set");
+  fanSetTopic_ = deviceTopic("fan/set");
+  powerSetTopic_ = deviceTopic("power/set");
 
   esp_mqtt_client_config_t mc = {};
   mc.broker.address.hostname = b.host.c_str();
@@ -163,22 +178,28 @@ bool MqttHa::begin(const MqttHaConfig& cfg) {
 
 void MqttHa::onEvent(void* self, const char* /*base*/, int32_t id, void* data) {
   auto* mqtt = static_cast<MqttHa*>(self);
-  switch (static_cast<esp_mqtt_event_id_t>(id)) {
-    case MQTT_EVENT_CONNECTED:
-      mqtt->onConnected();
-      break;
-    case MQTT_EVENT_DISCONNECTED:
-      mqtt->connected_.store(false);
-      log_w("mqtt: disconnected; retrying");
-      break;
-    case MQTT_EVENT_DATA:
-      mqtt->onData(data);
-      break;
-    case MQTT_EVENT_ERROR:
-      mqtt->onError(data);
-      break;
-    default:
-      break;
+  // Firmware is built with exceptions: an uncaught bad_alloc here would abort
+  // the chip, and with it the BLE loop and any STOP. Drop the event instead.
+  try {
+    switch (static_cast<esp_mqtt_event_id_t>(id)) {
+      case MQTT_EVENT_CONNECTED:
+        mqtt->onConnected();
+        break;
+      case MQTT_EVENT_DISCONNECTED:
+        mqtt->connected_.store(false);
+        log_w("mqtt: disconnected; retrying");
+        break;
+      case MQTT_EVENT_DATA:
+        mqtt->onData(data);
+        break;
+      case MQTT_EVENT_ERROR:
+        mqtt->onError(data);
+        break;
+      default:
+        break;
+    }
+  } catch (const std::bad_alloc&) {
+    log_w("mqtt: out of memory handling event %d; dropped", static_cast<int>(id));
   }
 }
 
@@ -186,14 +207,21 @@ void MqttHa::onConnected() {
   setError("");
   log_i("mqtt: connected to broker");
   publish(availTopic_, "online", /*retain=*/true);
-  publishDiscovery();
+  // Discovery is the big allocation here; if it runs out of memory, still
+  // subscribe below, or STOP / power-off over MQTT would be lost until the next
+  // reconnect.
+  try {
+    publishDiscovery();
+  } catch (const std::bad_alloc&) {
+    log_w("mqtt: out of memory publishing discovery; continuing");
+  }
   // Delete retained commands at the broker before subscribing (an empty retained
   // publish clears one). Any that still arrive are dropped by their retain flag.
   bool subscribed = true;
-  for (const char* leaf : {"fog/set", "density/set", "fan/set", "power/set"}) {
-    const std::string topic = deviceTopic(leaf);
-    publish(topic, "", /*retain=*/true);
-    subscribed &= esp_mqtt_client_subscribe_single(asClient(client_), topic.c_str(), 0) >= 0;
+  for (const std::string* topic :
+       {&fogSetTopic_, &densitySetTopic_, &fanSetTopic_, &powerSetTopic_}) {
+    publish(*topic, "", /*retain=*/true);
+    subscribed &= esp_mqtt_client_subscribe_single(asClient(client_), topic->c_str(), 0) >= 0;
   }
   if (!subscribed) setError("connected, but subscribing to the command topics failed");
   connected_.store(true);
@@ -215,8 +243,8 @@ void MqttHa::onData(void* event) {
       ev->data_len != ev->total_data_len || ev->data_len > kMaxCommandBytes) {
     return;
   }
-  onMessage(std::string(ev->topic, ev->topic_len), std::string(ev->data, ev->data_len),
-            ev->retain);
+  onMessage(std::string_view(ev->topic, ev->topic_len),
+            std::string_view(ev->data, ev->data_len), ev->retain);
 }
 
 void MqttHa::onError(void* event) {
@@ -271,9 +299,16 @@ void MqttHa::runPublisher() {
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(kPublisherPollMs));
     if (!connected_.load()) continue;
-    // Fresh telemetry as it arrives, plus a periodic heartbeat.
-    const bool heartbeatDue = (int32_t)(millis() - nextPublishMs_) >= 0;
-    if (statePending_.exchange(false) || heartbeatDue) publishCurrentState();
+    // Fresh telemetry at most once a second, plus a periodic heartbeat. The
+    // flag is cleared before publishCurrentState() copies the snapshot, so a
+    // frame landing in between is still in what goes out.
+    const uint32_t now = millis();
+    const bool heartbeatDue = (int32_t)(now - nextPublishMs_) >= 0;
+    const bool freshDue = statePending_.load() && now - lastPublishMs_ >= kMinStatePublishMs;
+    if (freshDue || heartbeatDue) {
+      statePending_.store(false);
+      publishCurrentState();
+    }
   }
 }
 
@@ -461,40 +496,49 @@ void MqttHa::publishCurrentState() {
     Lock lock(mux_.load());
     snap = lastSnap_;
   }
-  if (!publish(deviceTopic("state"), stateJson(snap), /*retain=*/true)) {
-    log_w("mqtt: state publish failed");
+  lastPublishMs_ = millis();
+  nextPublishMs_ = lastPublishMs_ + cfg_.publishIntervalMs;
+  // An uncaught bad_alloc on this task would abort the whole chip.
+  bool sent = false;
+  try {
+    sent = publish(deviceTopic("state"), stateJson(snap), /*retain=*/true);
+    if (!sent) log_w("mqtt: state publish failed");
+  } catch (const std::bad_alloc&) {
+    log_w("mqtt: out of memory; state publish skipped");
   }
-  nextPublishMs_ = millis() + cfg_.publishIntervalMs;
+  if (!sent) statePending_.store(true);  // try again next second, not at the heartbeat
 }
 
-void MqttHa::onMessage(const std::string& topic, const std::string& payload, bool retained) {
-  const bool isFog = topic == deviceTopic("fog/set");
-  const bool isDensity = topic == deviceTopic("density/set");
-  const bool isFan = topic == deviceTopic("fan/set");
-  const bool isPower = topic == deviceTopic("power/set");
+// Allocation-free (topics are prebuilt in begin()): a STOP or power-off must
+// not be lost to a failed allocation.
+void MqttHa::onMessage(std::string_view topic, std::string_view payload, bool retained) {
+  const bool isFog = topic == fogSetTopic_;
+  const bool isDensity = topic == densitySetTopic_;
+  const bool isFan = topic == fanSetTopic_;
+  const bool isPower = topic == powerSetTopic_;
   if (!isFog && !isDensity && !isFan && !isPower) return;
   // A retained command is stale (replayed by the broker on subscribe, not sent
   // now): never act on one, so a stored ON can't re-ignite fog on a reconnect.
   if (retained) {
-    log_w("mqtt: ignoring retained command on %s", topic.c_str());
+    log_w("mqtt: ignoring retained command on %.*s", static_cast<int>(topic.size()),
+          topic.data());
     return;
   }
   if (isFog) {
-    const std::string body = upper(payload);
-    if (body == "ON") {
+    if (equalsWord(payload, "ON")) {
       if (cfg_.broker.allowRemoteIgnition && fogStart_) {
         fogStart_();
       } else {
         log_w("mqtt: remote fog START ignored (remote control is off)");
       }
-    } else if (body == "OFF" && fogStop_) {
+    } else if (equalsWord(payload, "OFF") && fogStop_) {
       fogStop_();
     }
     return;
   }
   // Power-off ends fog, so like STOP it doesn't need remote control allowed.
   if (isPower) {
-    if (upper(payload) == "OFF" && powerOff_) powerOff_();
+    if (equalsWord(payload, "OFF") && powerOff_) powerOff_();
     return;
   }
   // Density/fan change what the machine does, so like START they need remote
@@ -503,9 +547,13 @@ void MqttHa::onMessage(const std::string& topic, const std::string& payload, boo
     log_w("mqtt: remote density/fan ignored (remote control is off)");
     return;
   }
+  char digits[kMaxCommandBytes + 1];  // strtol needs a terminated copy
+  const size_t n = std::min(payload.size(), static_cast<size_t>(kMaxCommandBytes));
+  memcpy(digits, payload.data(), n);
+  digits[n] = '\0';
   char* end = nullptr;
-  long v = strtol(payload.c_str(), &end, 10);  // reject non-numeric/negative
-  if (end == payload.c_str() || v < 0) return;
+  long v = strtol(digits, &end, 10);  // reject non-numeric/negative
+  if (end == digits || v < 0) return;
   if (isDensity && density_) {
     density_(clampU32(static_cast<uint32_t>(v), kDensityMin, kDensityMax));
   } else if (isFan && fan_) {

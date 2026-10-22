@@ -99,6 +99,25 @@ void maybeAutoGuessTimezone() {
   startTzGuess();
 }
 
+// The firmware is built with C++ exceptions: an uncaught std::bad_alloc aborts
+// the chip, and a controller reset mid-fog leaves the machine spraying for about
+// a minute. Run a loop step so that running out of memory skips it instead.
+constexpr uint32_t kLowMemoryLogMs = 1000;  // at most one warning a second
+
+template <typename Step>
+void guarded(const char* what, Step&& step) {
+  try {
+    step();
+  } catch (const std::bad_alloc&) {
+    static uint32_t lastLogMs = 0;
+    if (millis() - lastLogMs >= kLowMemoryLogMs) {
+      lastLogMs = millis();
+      log_w("loop: out of memory in %s; step skipped (heap %u, largest block %u)", what,
+            (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    }
+  }
+}
+
 // Serial and MQTT power-off (the web route does the same through its deps).
 // A running program ends first, so it can't fire again.
 bool powerOffMachine() {
@@ -257,14 +276,17 @@ void setup() {
 }
 
 void loop() {
-  g_fogger.loop();
-  g_wifi.loop();
-  g_web.loop();
-  g_seq.loop();  // (MQTT runs on its own task; see mqtt_ha.h)
-  pollSerial();
-
-  maybeAutoGuessTimezone();
-  if (g_web.consumeTzGuessRequest()) startTzGuess();
+  // Each step is guarded on its own, so one that runs out of memory can't skip
+  // the others (the BLE loop writes STOP; the sequencer ends pulses).
+  guarded("ble", [] { g_fogger.loop(); });
+  guarded("wifi", [] { g_wifi.loop(); });
+  guarded("web", [] { g_web.loop(); });
+  guarded("program", [] { g_seq.loop(); });  // (MQTT runs on its own task)
+  guarded("serial", [] { pollSerial(); });
+  guarded("time", [] {
+    maybeAutoGuessTimezone();
+    if (g_web.consumeTzGuessRequest()) startTzGuess();
+  });
 
   if (g_web.rebootPending()) {
     // Latch a STOP and pump the BLE loop briefly so the machine isn't left

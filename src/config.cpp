@@ -133,6 +133,16 @@ ConfigData Config::get() const {
   return cache_;
 }
 
+bool Config::mqttEnabled() const {
+  Lock lock(mutex_);
+  return cache_.mqtt.enabled;
+}
+
+std::string Config::timezone() const {
+  Lock lock(mutex_);
+  return cache_.timezone;
+}
+
 void Config::ensureApPassword() {
   if (!open_) return;
   WriteLock wlock(writeMux_);

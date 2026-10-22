@@ -7,6 +7,7 @@
 #include <mbedtls/x509_crt.h>
 
 #include <cstring>
+#include <new>
 
 #include "fw_version.h"
 #include "web_assets.h"  // generated from data/ by tools/web_assets.py
@@ -72,8 +73,14 @@ constexpr int kMaxMqttBodyBytes = 6144;
 // A fog/program START must follow POST /api/fog/arm within this window.
 constexpr uint32_t kArmWindowMs = 8000;
 
-// Longest gap between WebSocket status pushes (keeps the UI clock ticking).
-constexpr uint32_t kStatusHeartbeatMs = 1000;
+// WebSocket status cadence: at most one push a second (status frames arrive
+// 4-10 times a second; pushing each one churned the heap until an allocation
+// failed and rebooted the controller), and at least one (a heartbeat keeps the
+// UI clock ticking when no frames arrive).
+constexpr uint32_t kStatusPushMs = 1000;
+// Skip a WebSocket push when the largest free heap block is below this: the
+// JSON (~1 KB) plus its per-send copy and the TCP buffers need room to spare.
+constexpr uint32_t kMinStatusPushBlock = 4096;
 
 // Per-request OTA upload state (stored in req->_tempObject).
 constexpr uint8_t kOtaOwner = 1;        // this request owns the OTA session
@@ -214,7 +221,7 @@ void WebServer::loop() {
   // Pushes ride on BLE status frames; with the machine off / out of range none
   // arrive, so the UI clock, link state and program countdown would freeze.
   // Send a heartbeat push whenever none has gone out for a while.
-  if (millis() - lastPushMs_ >= kStatusHeartbeatMs) broadcastStatus();
+  if (millis() - lastPushMs_ >= kStatusPushMs) broadcastStatus();
 }
 
 std::string WebServer::buildStatusJson() const {
@@ -252,10 +259,10 @@ std::string WebServer::buildStatusJson() const {
   wifi["portal"] = w.portal;
   wifi["host"] = deps_.wifi->hostname();
 
-  const ConfigData cfg = deps_.config->get();
-  doc["mqtt_enabled"] = cfg.mqtt.enabled;
+  const bool mqttEnabled = deps_.config->mqttEnabled();
+  doc["mqtt_enabled"] = mqttEnabled;
   JsonObject mq = doc["mqtt"].to<JsonObject>();
-  mq["enabled"] = cfg.mqtt.enabled;
+  mq["enabled"] = mqttEnabled;
   mq["connected"] = deps_.mqtt != nullptr && deps_.mqtt->connected();
   mq["error"] = deps_.mqtt != nullptr ? deps_.mqtt->lastError() : std::string();
   doc["fw_build"] = fwBuild();
@@ -276,12 +283,22 @@ std::string WebServer::buildStatusJson() const {
     tm["synced"] = deps_.time->synced();
     tm["local"] = deps_.time->localString();
     tm["utc"] = deps_.time->isoUtc();
-    tm["tz"] = cfg.timezone;
+    tm["tz"] = deps_.config->timezone();
   } else {
     tm["synced"] = false;
   }
 
+  // Heap headroom: a failed allocation here once rebooted the controller.
+  JsonObject heap = doc["heap"].to<JsonObject>();
+  heap["free"] = ESP.getFreeHeap();
+  heap["min_free"] = ESP.getMinFreeHeap();    // lowest since boot
+  heap["max_block"] = ESP.getMaxAllocHeap();  // largest single allocation possible
+
+  // ArduinoJson doesn't throw when it runs out of memory; it drops members.
+  // Treat that like a failed allocation rather than send a partial status.
+  if (doc.overflowed()) throw std::bad_alloc();
   std::string out;
+  out.reserve(measureJson(doc));  // one allocation, not a series of regrowths
   serializeJson(doc, out);
   return out;
 }
@@ -294,17 +311,40 @@ void WebServer::handleWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
       client->close();
       return;
     }
-    client->text(buildStatusJson().c_str());  // prime the new client
+    // Firmware is built with exceptions: an uncaught bad_alloc anywhere aborts
+    // the chip, and a reset mid-fog leaves the machine spraying for a minute.
+    try {
+      const std::string json = buildStatusJson();
+      client->text(json.data(), json.size());  // prime the new client
+    } catch (const std::bad_alloc&) {
+      log_w("web: out of memory priming a WebSocket client; dropping it");
+      client->client()->close();  // raw TCP close: a WS close frame allocates
+    }
   }
 }
 
-void WebServer::pushStatus(const FoggerSnapshot&) { broadcastStatus(); }
+void WebServer::pushStatus(const FoggerSnapshot&) {
+  if (millis() - lastPushMs_ < kStatusPushMs) return;  // see kStatusPushMs
+  broadcastStatus();
+}
 
 void WebServer::broadcastStatus() {
   lastPushMs_ = millis();  // frame pushes and heartbeats share one cadence
   if (ws_.count() == 0) return;
   if (!ws_.availableForWriteAll()) return;  // don't queue onto slow clients
-  ws_.textAll(buildStatusJson().c_str());
+  // Low on memory: skip this update rather than push the heap to the edge.
+  if (ESP.getMaxAllocHeap() < kMinStatusPushBlock) {
+    log_w("web: low memory (largest block %u); status push skipped",
+          (unsigned)ESP.getMaxAllocHeap());
+    return;
+  }
+  try {
+    const std::string json = buildStatusJson();
+    ws_.textAll(json.data(), json.size());
+  } catch (const std::bad_alloc&) {
+    // Runs on the loop task: skip one UI update rather than reboot (no STOP).
+    log_w("web: out of memory; status push skipped");
+  }
 }
 
 bool WebServer::hostAllowed(const String& hostIn) const {
@@ -384,7 +424,16 @@ void WebServer::registerRoutes() {
   // --- Telemetry ---
   server_.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
     if (!guardMutation(req)) return;  // discloses MAC/SSID/IP; block rebinding reads
-    sendJson(req, 200, buildStatusJson());
+    try {
+      sendJson(req, 200, buildStatusJson());
+    } catch (const std::bad_alloc&) {
+      log_w("web: out of memory building /api/status");
+      try {
+        req->send(503);  // allocates a response too
+      } catch (const std::bad_alloc&) {
+        req->client()->close();  // drop the connection; frees the request
+      }
+    }
   });
 
   // --- Fog control (no body). Manual control cancels any running program. ---

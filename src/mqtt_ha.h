@@ -29,6 +29,7 @@
 #include <atomic>
 #include <functional>
 #include <string>
+#include <string_view>
 
 #include "fogger_ble.h"
 #include "mqtt_settings.h"
@@ -82,18 +83,22 @@ class MqttHa {
   void publishDiscovery();
   void publishDiscoveryEntity(const char* component, const char* object,
                               const std::string& configJson);
-  void onMessage(const std::string& topic, const std::string& payload, bool retained);
+  void onMessage(std::string_view topic, std::string_view payload, bool retained);
   std::string deviceTopic(const char* leaf) const;  // base/id/<leaf>
   std::string stateJson(const FoggerSnapshot& snap) const;
 
   MqttHaConfig cfg_;              // const after begin(); esp-mqtt keeps a pointer
                                   // to cfg_.broker.caPem, so it must stay alive
   std::string availTopic_;        // LWT / availability topic (const after begin())
+  // Command topics, built in begin() (const after it), so that handling a
+  // command never allocates: a STOP must not be lost to a failed allocation.
+  std::string fogSetTopic_, densitySetTopic_, fanSetTopic_, powerSetTopic_;
   void* client_ = nullptr;        // esp_mqtt_client_handle_t
   bool started_ = false;          // set once in begin()
   std::atomic<bool> connected_{false};
   std::atomic<bool> statePending_{false};
   uint32_t nextPublishMs_ = 0;    // publisher task only
+  uint32_t lastPublishMs_ = 0;    // publisher task only (fresh-state rate limit)
 
   // Guards lastSnap_ (written by publishState() on loop) and lastError_
   // (written on the esp-mqtt task, read by the web task). SemaphoreHandle_t.

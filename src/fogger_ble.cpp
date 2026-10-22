@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <new>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -30,6 +31,25 @@ constexpr uint32_t kPowerOffWriteTtlMs = 3000;  // drop a power-off that can't b
 constexpr uint32_t kPowerOffHoldMs = 15000;     // refuse START/adjust this long after one
 
 SemaphoreHandle_t asMutex(void* h) { return static_cast<SemaphoreHandle_t>(h); }
+
+// Scoped FreeRTOS mutex. The firmware is built with exceptions and std::string
+// copies made under these locks can throw bad_alloc; a lock released by hand
+// would then stay held forever and wedge the BLE host task.
+class MutexLock {
+ public:
+  explicit MutexLock(void* m)
+      : m_(asMutex(m)), locked_(xSemaphoreTake(m_, portMAX_DELAY) == pdTRUE) {}
+  ~MutexLock() {
+    if (locked_) xSemaphoreGive(m_);
+  }
+  bool locked() const { return locked_; }
+  MutexLock(const MutexLock&) = delete;
+  MutexLock& operator=(const MutexLock&) = delete;
+
+ private:
+  SemaphoreHandle_t m_;
+  bool locked_;
+};
 NimBLEClient* asClient(void* h) { return static_cast<NimBLEClient*>(h); }
 NimBLERemoteCharacteristic* asChar(void* h) {
   return static_cast<NimBLERemoteCharacteristic*>(h);
@@ -61,13 +81,18 @@ class ScanShim : public NimBLEScanCallbacks {
  public:
   explicit ScanShim(FoggerBle* owner) : owner_(owner) {}
   void onResult(const NimBLEAdvertisedDevice* dev) override {
-    const std::string name = dev->getName();
-    // A fog machine advertises the FFF0 service and/or the CH9141 name.
-    const bool looksLikeMachine =
-        dev->isAdvertisingService(NimBLEUUID(kServiceUuid)) ||
-        name.rfind("CH9141", 0) == 0;
-    owner_->handleAdvertisement(dev->getAddress().toString(), name,
-                                looksLikeMachine, dev->getRSSI());
+    // A bad_alloc escaping into NimBLE would abort the chip; an advertisement
+    // dropped under memory pressure is harmless (the next one comes shortly).
+    try {
+      const std::string name = dev->getName();
+      // A fog machine advertises the FFF0 service and/or the CH9141 name.
+      const bool looksLikeMachine =
+          dev->isAdvertisingService(NimBLEUUID(kServiceUuid)) ||
+          name.rfind("CH9141", 0) == 0;
+      owner_->handleAdvertisement(dev->getAddress().toString(), name,
+                                  looksLikeMachine, dev->getRSSI());
+    } catch (const std::bad_alloc&) {
+    }
   }
 
  private:
@@ -139,7 +164,17 @@ void FoggerBle::loop() {
       break;
     case LinkState::kScanning:
       if (foundTarget_.load()) {
-        connectToFound();
+        try {
+          connectToFound();
+        } catch (const std::bad_alloc&) {
+          // Out of memory mid-connect: drop any half-made link and rescan after
+          // the backoff, rather than sit in kConnecting for good.
+          log_w("fogger_ble: out of memory while connecting; will retry");
+          if (client_ != nullptr && asClient(client_)->isConnected()) {
+            asClient(client_)->disconnect();
+          }
+          handleDisconnect();
+        }
       } else if (now - scanStartedMs_ > kScanRestartMs) {
         NimBLEDevice::getScan()->stop();
         startScan();  // recover from a silently-ended scan
@@ -202,12 +237,12 @@ void FoggerBle::handleAdvertisement(const std::string& addr,
   // a target change on another task can't leave foundAddr_ pointing at the old
   // machine. Discover-only (never auto-connect) until a target is chosen.
   bool matched = false;
-  if (xSemaphoreTake(asMutex(targetMux_), portMAX_DELAY) == pdTRUE) {
-    if (!targetMac_.empty() && toLower(addr) == toLower(targetMac_)) {
+  {
+    MutexLock lock(targetMux_);
+    if (lock.locked() && !targetMac_.empty() && toLower(addr) == toLower(targetMac_)) {
       foundAddr_ = addr;
       matched = true;
     }
-    xSemaphoreGive(asMutex(targetMux_));
   }
   if (!matched) return;
 
@@ -228,38 +263,41 @@ void FoggerBle::recordDiscovered(const std::string& mac, const std::string& rawN
   const std::string macLower = toLower(mac);
   const std::string target = toLower(targetMac());  // taken before discoveredMux_
   const uint32_t now = millis();
-  if (xSemaphoreTake(asMutex(discoveredMux_), portMAX_DELAY) != pdTRUE) return;
-  bool found = false;
-  for (auto& d : discovered_) {
-    if (toLower(d.mac) == macLower) {
-      d.rssi = rssi;
-      d.lastSeenMs = now;
-      if (!name.empty()) d.name = name;
-      found = true;
-      break;
-    }
-  }
   bool added = false;
-  if (!found && discovered_.size() < kMaxDiscovered) {
-    discovered_.push_back({mac, name, rssi, now});
-    added = true;
-  } else if (!found) {
-    // Full (e.g. flooded with spoofed CH9141 adverts): replace the stalest entry,
-    // never the bound target, so a real machine can still reach the picker.
-    auto victim = discovered_.end();
-    for (auto it = discovered_.begin(); it != discovered_.end(); ++it) {
-      if (toLower(it->mac) == target) continue;
-      if (victim == discovered_.end() ||
-          (int32_t)(it->lastSeenMs - victim->lastSeenMs) < 0) {
-        victim = it;
+  {
+    MutexLock lock(discoveredMux_);
+    if (!lock.locked()) return;
+    bool found = false;
+    for (auto& d : discovered_) {
+      if (toLower(d.mac) == macLower) {
+        d.rssi = rssi;
+        d.lastSeenMs = now;
+        if (!name.empty()) d.name = name;
+        found = true;
+        break;
       }
     }
-    if (victim != discovered_.end()) {
-      *victim = {mac, name, rssi, now};
+    if (!found && discovered_.size() < kMaxDiscovered) {
+      discovered_.push_back({mac, name, rssi, now});
       added = true;
+    } else if (!found) {
+      // Full (e.g. flooded with spoofed CH9141 adverts): replace the stalest
+      // entry, never the bound target, so a real machine can still reach the
+      // picker.
+      auto victim = discovered_.end();
+      for (auto it = discovered_.begin(); it != discovered_.end(); ++it) {
+        if (toLower(it->mac) == target) continue;
+        if (victim == discovered_.end() ||
+            (int32_t)(it->lastSeenMs - victim->lastSeenMs) < 0) {
+          victim = it;
+        }
+      }
+      if (victim != discovered_.end()) {
+        *victim = {mac, name, rssi, now};
+        added = true;
+      }
     }
   }
-  xSemaphoreGive(asMutex(discoveredMux_));
   if (added) {
     log_i("fogger_ble: discovered machine %s '%s' (%ddBm)", mac.c_str(),
           name.c_str(), rssi);
@@ -267,43 +305,38 @@ void FoggerBle::recordDiscovered(const std::string& mac, const std::string& rawN
 }
 
 std::vector<DiscoveredMachine> FoggerBle::discoveredMachines() const {
-  std::vector<DiscoveredMachine> copy;
-  if (xSemaphoreTake(asMutex(discoveredMux_), portMAX_DELAY) != pdTRUE) return copy;
-  copy = discovered_;
-  xSemaphoreGive(asMutex(discoveredMux_));
-  return copy;
+  MutexLock lock(discoveredMux_);
+  if (!lock.locked()) return {};
+  return discovered_;
 }
 
 std::string FoggerBle::targetMac() const {
-  std::string m;
-  if (xSemaphoreTake(asMutex(targetMux_), portMAX_DELAY) == pdTRUE) {
-    m = targetMac_;
-    xSemaphoreGive(asMutex(targetMux_));
-  }
-  return m;
+  MutexLock lock(targetMux_);
+  return lock.locked() ? targetMac_ : std::string();
 }
 
 bool FoggerBle::setTarget(const std::string& mac) {
   // Marshal the change onto loop(); don't touch NimBLE/link state off-task.
-  if (xSemaphoreTake(asMutex(targetMux_), portMAX_DELAY) != pdTRUE) return false;
+  MutexLock lock(targetMux_);
+  if (!lock.locked()) return false;
   pendingTarget_ = mac;
   hasPendingTarget_ = true;
-  xSemaphoreGive(asMutex(targetMux_));
   return true;
 }
 
 void FoggerBle::applyPendingTarget() {
   std::string mac, previous;
   bool has = false;
-  if (xSemaphoreTake(asMutex(targetMux_), portMAX_DELAY) == pdTRUE) {
-    if (hasPendingTarget_) {
+  {
+    MutexLock lock(targetMux_);
+    if (lock.locked() && hasPendingTarget_) {
+      // Copies first, flag last: if a copy throws, the request stays pending.
       mac = pendingTarget_;
       previous = targetMac_;
-      hasPendingTarget_ = false;
       targetMac_ = mac;  // the live target becomes the requested one
+      hasPendingTarget_ = false;
       has = true;
     }
-    xSemaphoreGive(asMutex(targetMux_));
   }
   if (!has) return;
   // Re-selecting the machine we are already live on is a no-op: no needless
@@ -350,9 +383,9 @@ void FoggerBle::applyTarget(const std::string& mac) {
   clearPowerOff();
   // Forget a stale matched address so a late advertisement can't reconnect the
   // old machine (reassembler is reset by handleDisconnect / connectToFound).
-  if (xSemaphoreTake(asMutex(targetMux_), portMAX_DELAY) == pdTRUE) {
-    foundAddr_.clear();
-    xSemaphoreGive(asMutex(targetMux_));
+  {
+    MutexLock lock(targetMux_);
+    if (lock.locked()) foundAddr_.clear();
   }
   if (link_.load() == LinkState::kConnected && client_ != nullptr) {
     stopBeforeDrop();                 // never leave the old machine spraying
@@ -382,10 +415,12 @@ void FoggerBle::connectToFound() {
   }
 
   std::string connectAddr, target;
-  if (xSemaphoreTake(asMutex(targetMux_), portMAX_DELAY) == pdTRUE) {
-    connectAddr = foundAddr_;
-    target = targetMac_;
-    xSemaphoreGive(asMutex(targetMux_));
+  {
+    MutexLock lock(targetMux_);
+    if (lock.locked()) {
+      connectAddr = foundAddr_;
+      target = targetMac_;
+    }
   }
   // The matched address must still be the current target (it can change between
   // the scan match and here); otherwise rescan for the new one.

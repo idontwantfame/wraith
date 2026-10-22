@@ -55,6 +55,12 @@ task; other tasks hand requests over through mutex-guarded or atomic state.
 - Remote control over MQTT (start, density, fan) is off by default. Turning it
   on needs the device password. Stop is always accepted.
 - OTA is refused while fog runs or a stop is still pending.
+- **Low memory must not reboot the controller.** The firmware is built with C++
+  exceptions, so an uncaught `std::bad_alloc` on any task aborts the chip. On
+  2026-10-22 one did: the web status push, then sent on every BLE frame, ran
+  the heap out while a browser loaded the UI. Status pushes (WebSocket and
+  MQTT) now go out at most once a second, and every path that builds status
+  JSON catches `bad_alloc` and skips that update. `/api/status` reports `heap`.
 - Power-off (web, API, serial, MQTT) is sent only while connected, never after
   a reconnect, so a machine someone just switched on is never switched straight
   back off. It ends any program first. Until the link drops (at most 15 s), fog
@@ -66,8 +72,9 @@ task; other tasks hand requests over through mutex-guarded or atomic state.
   attended tests (2026-10-21), pulling the ESP32's power mid-fog left the
   machine spraying for roughly 60 s before it stopped by itself. Nothing on the
   controller can send a stop then, so avoid anything that resets it while fog
-  runs; the serial monitor opens without toggling DTR / RTS for this reason.
-  A normal disconnect is different: it sends a stop first.
+  runs. Opening the USB console with DTR / RTS turned off resets the C3
+  (tested 2026-10-22), so `pio device monitor` keeps both on, and other
+  terminals must too. A normal disconnect is different: it sends a stop first.
 
 ## Security model
 
@@ -94,7 +101,7 @@ JSON bodies. `/ws` pushes the same JSON as `/api/status` about once a second.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/status` | Machine link, fog state, batteries, machine report, program (incl. `last_stop`), Wi-Fi (incl. access point `bssid` / `channel`), MQTT, `fw_build` |
+| GET | `/api/status` | Machine link, fog state, batteries, machine report, program (incl. `last_stop`), Wi-Fi (incl. access point `bssid` / `channel`), MQTT, `fw_build`, `heap` (`free`, `min_free` since boot, `max_block`) |
 | GET | `/api/config` | Saved settings (never returns passwords) |
 | POST | `/api/fog/arm`, `/api/fog/start` | Two-step fog start |
 | POST | `/api/fog/stop` | Stop fog and any program |
@@ -122,7 +129,7 @@ device id is `wraith-xxxxxx` (from the chip's MAC).
 
 | Topic | Direction | Payload |
 |---|---|---|
-| `.../state` | device → broker, retained | JSON: `fog`, `density`, `fan`, `batt_a`, `batt_b`, `batt_min`, `charger`, `charge_done`, `fault`, `link`, `rssi`, `connected`, `time` |
+| `.../state` | device → broker, retained | JSON: `fog`, `density`, `fan`, `batt_a`, `batt_b`, `batt_min`, `charger`, `charge_done`, `fault`, `link`, `rssi`, `connected`, `time`. Sent at most once a second when telemetry changes, and every 5 s regardless. |
 | `.../status` | device → broker | Availability: `online` / `offline` |
 | `.../fog/set` | broker → device | `ON` / `OFF` (`ON` only when remote control is allowed) |
 | `.../density/set`, `.../fan/set` | broker → device | Raw values as above (only when remote control is allowed) |

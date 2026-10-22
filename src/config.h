@@ -50,6 +50,10 @@ class Config {
 
   // Cached snapshot; cheap, no flash access. Thread-safe (copied under lock).
   ConfigData get() const;
+  // Single fields for hot paths (the status push), without copying every
+  // string in ConfigData (passwords, the MQTT CA). Thread-safe.
+  bool mqttEnabled() const;
+  std::string timezone() const;
 
   // Mutators validate, persist to NVS, and update the cache. Return false on
   // invalid input or a flash write failure (cache is left unchanged then).
