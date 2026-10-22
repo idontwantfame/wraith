@@ -7,24 +7,31 @@ async function api(path, method = "GET", body) {
   // X-Requested-With is required by the server on every state-changing route; a
   // cross-site page cannot set it, so it (with the Host/Origin check) blocks CSRF
   // and DNS-rebinding against this unauthenticated LAN surface.
-  const opt = { method, headers: { "X-Requested-With": "fogger" } };
+  // A request that hangs (device rebooting or out of memory) is abandoned, so it
+  // stops holding one of the controller's few connections.
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), kApiTimeoutMs);
+  const opt = { method, headers: { "X-Requested-With": "fogger" }, signal: abort.signal };
   if (body !== undefined) {
     opt.headers["Content-Type"] = "application/json";
     opt.body = JSON.stringify(body);
   }
   try {
     const res = await fetch(path, opt);
+    clearTimeout(timer);
     try {
       return await res.json();
     } catch (_) {
       return { ok: res.ok };
     }
   } catch (_) {
+    clearTimeout(timer);
     // Device rebooting / dropped off Wi-Fi: surface as a normal rejection so
     // every caller can toast it, and no fetch leaks an unhandled rejection.
     return { ok: false, error: "network" };
   }
 }
+const kApiTimeoutMs = 10000;
 
 let toastTimer;
 function toast(msg, isErr = false) {
@@ -73,16 +80,42 @@ let dragging = false;
 // frame can't briefly snap the slider back to the previous value.
 const sliderPending = {};
 
+// Reconnects and fallback polling back off while the device keeps failing (2 s,
+// doubling to 30 s, with jitter), and polling is one request at a time. Fixed
+// 2 s retries from every open page buried a just-rebooted or low-memory
+// controller under connections it had no memory for, and kept it there.
+const kRetryMinMs = 2000;
+const kRetryMaxMs = 30000;
+const kWsStableMs = 10000;  // open this long before the back-off resets
+let wsRetryMs = kRetryMinMs;
+let wsOpenedAt = 0;
+
+function withJitter(ms) {
+  return ms + Math.random() * 0.3 * ms;
+}
+
+function scheduleWsRetry() {
+  setTimeout(connectWs, withJitter(wsRetryMs));
+  wsRetryMs = Math.min(wsRetryMs * 2, kRetryMaxMs);
+}
+
 function connectWs() {
   try {
     ws = new WebSocket(`ws://${location.host}/ws`);
   } catch (_) {
+    scheduleWsRetry();
     return;
   }
-  ws.onopen = () => (wsOk = true);
+  ws.onopen = () => {
+    wsOk = true;
+    wsOpenedAt = Date.now();
+  };
   ws.onclose = () => {
     wsOk = false;
-    setTimeout(connectWs, 2000);
+    // A socket the device keeps closing right away doesn't reset the back-off.
+    if (wsOpenedAt && Date.now() - wsOpenedAt >= kWsStableMs) wsRetryMs = kRetryMinMs;
+    wsOpenedAt = 0;
+    scheduleWsRetry();
   };
   ws.onmessage = (e) => {
     try {
@@ -91,9 +124,22 @@ function connectWs() {
   };
 }
 
-setInterval(() => {
-  if (!wsOk) api("/api/status").then(renderStatus).catch(() => {});
-}, 2000);
+let pollDelayMs = kRetryMinMs;
+async function pollStatus() {
+  if (!wsOk) {
+    const d = await api("/api/status");
+    if (d && d.ble) {
+      try {
+        renderStatus(d);
+      } catch (_) {}
+      pollDelayMs = kRetryMinMs;
+    } else {
+      pollDelayMs = Math.min(pollDelayMs * 2, kRetryMaxMs);
+    }
+  }
+  setTimeout(pollStatus, wsOk ? kRetryMinMs : withJitter(pollDelayMs));
+}
+setTimeout(pollStatus, kRetryMinMs);
 
 function setStat(id, text, cls) {
   const el = $(id);
