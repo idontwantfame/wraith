@@ -102,6 +102,14 @@ MqttSettings base() {
   return s;
 }
 
+void testDevicePasswordLength() {
+  CHECK(!fogger::devicePasswordLengthOk(""));
+  CHECK(!fogger::devicePasswordLengthOk("1234567"));
+  CHECK(fogger::devicePasswordLengthOk("12345678"));
+  CHECK(fogger::devicePasswordLengthOk(std::string(64, 'x')));
+  CHECK(!fogger::devicePasswordLengthOk(std::string(65, 'x')));
+}
+
 void testIgnitionAuth() {
   using fogger::IgnitionAuth;
   const MqttSettings off = base();
@@ -230,6 +238,7 @@ int main() {
   testBrokerIdentity();
   testPasswordCarriesOver();
   testIgnitionAuth();
+  testDevicePasswordLength();
   testCaPemRejectsKeys();
   if (g_failures == 0) {
     std::printf("OK: all MQTT settings tests passed\n");

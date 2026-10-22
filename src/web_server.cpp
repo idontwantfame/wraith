@@ -714,10 +714,6 @@ void WebServer::registerRoutes() {
             break;
           case IgnitionAuth::kSetPassword:
             choseDevicePassword = true;
-            if (!deps_.config->setDevicePassword(devicePass)) {
-              sendResult(req, false, "could not store the device password");
-              return;
-            }
             break;
           case IgnitionAuth::kBadLength:
             sendResult(req, false,
@@ -726,6 +722,19 @@ void WebServer::registerRoutes() {
           case IgnitionAuth::kWrongPassword:
             sendResult(req, false, "wrong device password");
             return;
+        }
+        // None set yet and one typed while not allowing remote START: keep it
+        // anyway (choosing it ahead of time is what the field invites).
+        if (!choseDevicePassword && cur.devicePassword.empty() && !devicePass.empty()) {
+          if (!devicePasswordLengthOk(devicePass)) {
+            sendResult(req, false, "a device password needs 8-64 characters");
+            return;
+          }
+          choseDevicePassword = true;
+        }
+        if (choseDevicePassword && !deps_.config->setDevicePassword(devicePass)) {
+          sendResult(req, false, "could not store the device password");
+          return;
         }
         const std::string typed = (json["pass"] | "");
         next.pass = resolveMqttPassword(json, typed, cur.mqtt, next);
