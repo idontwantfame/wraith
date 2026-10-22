@@ -162,14 +162,18 @@ bool MqttHa::begin(const MqttHaConfig& cfg) {
   client_ = client;
   esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, &MqttHa::onEvent, this);
   started_ = true;
-  if (esp_mqtt_client_start(client) != ESP_OK) {
-    started_ = false;
-    log_e("mqtt: client start failed");
-    return false;
-  }
+  // The publisher task starts the client once Wi-Fi is up (setNetworkUp), and
+  // stops it while it's down: no connection attempts every few seconds in setup
+  // mode, where they only churn the heap.
   if (xTaskCreate(&MqttHa::publisherEntry, "mqttpub", kPublisherStackBytes, this,
                   kTaskPriority, nullptr) != pdPASS) {
     log_e("mqtt: publisher task failed; telemetry won't be published");
+    // Without it nothing would start the client: start it now, as before.
+    if (esp_mqtt_client_start(client) != ESP_OK) {
+      started_ = false;
+      log_e("mqtt: client start failed");
+      return false;
+    }
   }
   log_i("mqtt: %s://%s:%u base=%s id=%s", b.transport.c_str(), b.host.c_str(), b.port,
         b.baseTopic.c_str(), cfg_.deviceId.c_str());
@@ -296,8 +300,21 @@ bool MqttHa::publish(const std::string& topic, const std::string& payload, bool 
 void MqttHa::publisherEntry(void* self) { static_cast<MqttHa*>(self)->runPublisher(); }
 
 void MqttHa::runPublisher() {
+  bool clientRunning = false;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(kPublisherPollMs));
+    // Run the client only while Wi-Fi is up. Start/stop can block (a stop waits
+    // for a connect attempt to end), so they happen here, never on loop().
+    const bool networkUp = networkUp_.load();
+    if (networkUp && !clientRunning) {
+      clientRunning = esp_mqtt_client_start(asClient(client_)) == ESP_OK;
+      if (!clientRunning) log_w("mqtt: client start failed; retrying");
+    } else if (!networkUp && clientRunning) {
+      esp_mqtt_client_stop(asClient(client_));
+      clientRunning = false;
+      connected_.store(false);
+      log_i("mqtt: paused (no Wi-Fi)");
+    }
     if (!connected_.load()) continue;
     // Fresh telemetry at most once a second, plus a periodic heartbeat. The
     // flag is cleared before publishCurrentState() copies the snapshot, so a

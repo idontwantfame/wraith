@@ -65,6 +65,10 @@ class MqttHa {
   // Record the latest telemetry from any task; the publisher task sends it.
   void publishState(const FoggerSnapshot& snap);
 
+  // Whether Wi-Fi is connected to a network (set from loop()). The client only
+  // runs while it is: no broker attempts in setup mode. Thread-safe.
+  void setNetworkUp(bool up) { networkUp_.store(up); }
+
   // Connection state for the UI. Thread-safe.
   bool connected() const { return connected_.load(); }
   std::string lastError() const;  // "" when connected / no error yet
@@ -97,6 +101,7 @@ class MqttHa {
   bool started_ = false;          // set once in begin()
   std::atomic<bool> connected_{false};
   std::atomic<bool> statePending_{false};
+  std::atomic<bool> networkUp_{false};  // see setNetworkUp()
   uint32_t nextPublishMs_ = 0;    // publisher task only
   uint32_t lastPublishMs_ = 0;    // publisher task only (fresh-state rate limit)
 

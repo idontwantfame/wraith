@@ -141,9 +141,12 @@ void pollSerial() {
                                                  : F("-> rejected (not connected)"));
       } else if (g_line == "status") {
         const auto s = g_fogger.snapshot();
-        Serial.printf("link=%s fog=%d batt=%u%% ip=%s\n", fogger::linkStateName(s.link),
-                      s.status.isFogging(), s.status.batteryMin(),
-                      g_wifi.status().ip.c_str());
+        // Heap too: in setup mode the HTTP status isn't reachable from the LAN.
+        Serial.printf("link=%s fog=%d batt=%u%% ip=%s heap=%u min=%u block=%u\n",
+                      fogger::linkStateName(s.link), s.status.isFogging(),
+                      s.status.batteryMin(), g_wifi.status().ip.c_str(),
+                      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
+                      (unsigned)ESP.getMaxAllocHeap());
       } else if (g_line == "poweroff") {
         Serial.println(powerOffMachine()
                            ? F("-> power-off queued; the machine switches off in a few seconds")
@@ -271,6 +274,8 @@ void setup() {
 }
 
 void loop() {
+  // MQTT runs only while Wi-Fi is on a network (its own task starts / stops it).
+  g_mqtt.setNetworkUp(g_wifi.mode() == fogger::WifiMode::kStaConnected);
   // Each step is guarded on its own, so one that runs out of memory can't skip
   // the others (the BLE loop writes STOP; the sequencer ends pulses).
   guarded("ble", [] { g_fogger.loop(); });
