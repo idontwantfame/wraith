@@ -60,7 +60,10 @@ task; other tasks hand requests over through mutex-guarded or atomic state.
   2026-10-22 one did: the web status push, then sent on every BLE frame, ran
   the heap out while a browser loaded the UI. Status pushes (WebSocket and
   MQTT) now go out at most once a second, and every path that builds status
-  JSON catches `bad_alloc` and skips that update. `/api/status` reports `heap`.
+  JSON catches `bad_alloc` and skips that update. A WebSocket client may queue
+  at most 4 messages and is dropped when it stops reading (a dead page used to
+  hold ~38 KB). `/api/status` reports `heap`, `ws_clients` and `boot`
+  (reset reason, uptime).
 - Power-off (web, API, serial, MQTT) is sent only while connected, never after
   a reconnect, so a machine someone just switched on is never switched straight
   back off. It ends any program first. Until the link drops (at most 15 s), fog
@@ -84,12 +87,16 @@ task; other tasks hand requests over through mutex-guarded or atomic state.
   are POST-only, and a strict Content-Security-Policy keeps radio-supplied names
   (BLE, SSIDs) from running as code.
 - The setup access point is **open**, so onboarding needs only a phone. It is
-  up only while Wraith has no working Wi-Fi (first boot, after Forget Wi-Fi,
-  or when the saved network fails three times). Over it, the server allows
-  only reads and `POST /api/wifi/connect`; everything else (fog, power-off,
-  MQTT, OTA, settings, `/api/config`) is refused. The remaining risk: while it
-  is up, someone nearby can point Wraith at their own network and then use it
-  there.
+  up only while Wraith has no working Wi-Fi: first boot or after Forget Wi-Fi
+  (until set up), or, with a network saved, when it fails three times **within
+  the first 10 minutes after power-on** (it closes again after that once nobody
+  is on it; later failures are just retried, so power-cycle Wraith to
+  reconfigure). While it is up, the server allows only `GET /api/status`,
+  `GET /api/wifi/scan` and `POST /api/wifi/connect`, for every client;
+  everything else (fog, power-off, MQTT, OTA, settings) is refused. Residual
+  risks: the home Wi-Fi password typed during setup crosses the open network
+  unencrypted, and someone nearby while it is up can point Wraith at their own
+  network and then use it there.
 - The **device password** authorises remote fog START over MQTT. The user
   chooses it the first time they allow remote START; it is needed again to
   change the broker / topic / TLS trust while remote START is on. A factory
@@ -111,7 +118,7 @@ JSON bodies. `/ws` pushes the same JSON as `/api/status` about once a second.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/status` | Machine link, fog state, batteries, machine report, program (incl. `last_stop`), Wi-Fi (incl. access point `bssid` / `channel`), MQTT, `fw_build`, `heap` (`free`, `min_free` since boot, `max_block`) |
+| GET | `/api/status` | Machine link, fog state, batteries, machine report, program (incl. `last_stop`), Wi-Fi (incl. access point `bssid` / `channel`), MQTT, `fw_build`, `heap` (`free`, `min_free` since boot, `max_block`), `boot` (`reason`, `reason_code`, `uptime_s`), `ws_clients` |
 | GET | `/api/config` | Saved settings (never returns passwords) |
 | POST | `/api/fog/arm`, `/api/fog/start` | Two-step fog start |
 | POST | `/api/fog/stop` | Stop fog and any program |

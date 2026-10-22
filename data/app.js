@@ -618,7 +618,7 @@ async function loadConfig() {
   $("mqttIgnite").checked = c.mqtt.allow_remote_ignition;
   $("devicePass").placeholder = c.device_password_set
     ? "Device password (to allow remote START)"
-    : "Choose a device password (8+ characters) to allow remote START";
+    : "Choose a device password (8-64 characters) to allow remote START";
   if (!c.mqtt.tls_supported) {
     // This firmware build has no TLS (not enough RAM on this board): don't offer it.
     [...$("mqttTransport").options]

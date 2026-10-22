@@ -2,6 +2,7 @@
 #include "wifi_mgr.h"
 
 #include <ESPmDNS.h>
+#include <esp_timer.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -12,6 +13,11 @@ constexpr uint8_t kDnsPort = 53;
 constexpr int kScanRunning = -1;   // WiFi.scanComplete() while in progress
 constexpr int kScanFailed = -2;    // WiFi.scanComplete() after a failed/timed-out scan
 constexpr uint8_t kMaxStaAttempts = 3;  // retry STA this many times before portal
+// With a network already saved, the (open) setup network may only appear this
+// long after power-on (see loop()). 64-bit microseconds: never wraps.
+constexpr int64_t kSetupWindowUs = 10LL * 60 * 1000 * 1000;
+
+bool setupWindowOver() { return esp_timer_get_time() >= kSetupWindowUs; }
 
 SemaphoreHandle_t asMutex(void* h) { return static_cast<SemaphoreHandle_t>(h); }
 
@@ -214,9 +220,19 @@ void WifiManager::loop() {
             cfg_.pass = goodPass_;
           }
           credsDirty_ = false;
-          log_w("wifi: STA connect failed; starting portal");
-          startPortal();
           staAttempts_ = 0;
+          if (!goodSsid_.empty() && !apUp_ && setupWindowOver()) {
+            // A saved network that keeps failing (router down, power cut) opens
+            // the open setup network only early after power-on: later, a
+            // neighbour could use it to move Wraith onto their own Wi-Fi. Keep
+            // retrying the saved network; power-cycle Wraith to reconfigure.
+            log_w("wifi: saved network unreachable; retrying (no setup network "
+                  "after the first %u min)", (unsigned)(kSetupWindowUs / 60000000));
+            startSta();
+          } else {
+            log_w("wifi: STA connect failed; starting portal");
+            startPortal();
+          }
         }
       }
       break;
@@ -230,6 +246,15 @@ void WifiManager::loop() {
       serviceScan();  // on the LAN, scans run only when the UI requests one
       break;
     case WifiMode::kApPortal:
+      // A fallback setup network (a network is saved) closes once the window
+      // after power-on is over and nobody is on it; then keep trying the saved
+      // network. First-time setup (nothing saved) stays open until done.
+      if (!goodSsid_.empty() && setupWindowOver() && WiFi.softAPgetStationNum() == 0) {
+        log_w("wifi: closing the fallback setup network; retrying the saved one");
+        stopPortal();
+        startSta();
+        break;
+      }
       dns_.processNextRequest();
       serviceScan();  // runs the pre-scan once (before clients) and caches it
       // Periodically re-attempt saved STA creds without a client having to act.

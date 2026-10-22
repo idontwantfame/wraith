@@ -134,11 +134,12 @@ inline bool secretEquals(const std::string& a, const std::string& b) {
 }
 
 constexpr size_t kMinDevicePasswordLen = 8;
+constexpr size_t kMaxDevicePasswordLen = 64;
 
 enum class IgnitionAuth : uint8_t {
   kAllowed,        // nothing to authorise, or the device password matched
   kSetPassword,    // no device password yet: store the typed one, then allow
-  kTooShort,       // no device password yet, and the typed one is too short
+  kBadLength,      // no device password yet, and the typed one isn't 8-64 chars
   kWrongPassword,  // a device password is set and the typed one doesn't match
 };
 
@@ -153,8 +154,9 @@ inline IgnitionAuth authorizeIgnitionChange(const MqttSettings& cur, const MqttS
   if (!next.allowRemoteIgnition) return IgnitionAuth::kAllowed;
   if (cur.allowRemoteIgnition && sameIgnitionScope(cur, next)) return IgnitionAuth::kAllowed;
   if (stored.empty()) {
-    return typed.size() >= kMinDevicePasswordLen ? IgnitionAuth::kSetPassword
-                                                 : IgnitionAuth::kTooShort;
+    const bool lengthOk =
+        typed.size() >= kMinDevicePasswordLen && typed.size() <= kMaxDevicePasswordLen;
+    return lengthOk ? IgnitionAuth::kSetPassword : IgnitionAuth::kBadLength;
   }
   return secretEquals(typed, stored) ? IgnitionAuth::kAllowed : IgnitionAuth::kWrongPassword;
 }

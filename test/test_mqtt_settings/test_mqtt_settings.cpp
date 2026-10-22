@@ -115,8 +115,12 @@ void testIgnitionAuth() {
   // First time on with no device password stored: the typed one becomes it,
   // if it is long enough.
   CHECK(fogger::authorizeIgnitionChange(off, on, "", "hunter22") == IgnitionAuth::kSetPassword);
-  CHECK(fogger::authorizeIgnitionChange(off, on, "", "short") == IgnitionAuth::kTooShort);
-  CHECK(fogger::authorizeIgnitionChange(off, on, "", "") == IgnitionAuth::kTooShort);
+  CHECK(fogger::authorizeIgnitionChange(off, on, "", "short") == IgnitionAuth::kBadLength);
+  CHECK(fogger::authorizeIgnitionChange(off, on, "", "") == IgnitionAuth::kBadLength);
+  CHECK(fogger::authorizeIgnitionChange(off, on, "", std::string(65, 'x')) ==
+        IgnitionAuth::kBadLength);
+  CHECK(fogger::authorizeIgnitionChange(off, on, "", std::string(64, 'x')) ==
+        IgnitionAuth::kSetPassword);
 
   // With one stored, it must match.
   CHECK(fogger::authorizeIgnitionChange(off, on, "hunter22", "hunter22") ==

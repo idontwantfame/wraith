@@ -3,6 +3,7 @@
 
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
+#include <esp_system.h>
 #include <esp_timer.h>
 #include <mbedtls/x509_crt.h>
 
@@ -56,11 +57,34 @@ bool originMatchesHost(AsyncWebServerRequest* req) {
   return origin == "http://" + host;
 }
 
-// What a client on the open setup network may do: read, and choose Wi-Fi.
+// esp_reset_reason() as words, for /api/status (the numeric code is sent too).
+const char* resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "power-on";
+    case ESP_RST_EXT: return "reset pin";
+    case ESP_RST_SW: return "software restart";
+    case ESP_RST_PANIC: return "crash";
+    case ESP_RST_INT_WDT: return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_BROWNOUT: return "brownout (power dip)";
+    default: return "other";
+  }
+}
+
+// True while Wraith's open setup network is up. The setup-only rule then holds
+// for every request, whichever interface it came in on: the home network isn't
+// connected meanwhile (the AP is torn down as soon as it is), and it can't be
+// fooled by a client addressing the station IP through the AP, or by IPv6.
+bool setupNetworkUp() { return (WiFi.getMode() & WIFI_MODE_AP) != 0; }
+
+// What may be done while the setup network is up: an allow-list of exactly
+// the status read, the Wi-Fi scan and choosing a network.
 bool allowedOnSetupNetwork(AsyncWebServerRequest* req) {
-  if (req->method() == HTTP_POST) return req->url() == "/api/wifi/connect";
-  // Reads, except the saved settings (home SSID, MQTT broker and user).
-  return req->url() != "/api/config";
+  const String& url = req->url();
+  if (req->method() == HTTP_POST) return url == "/api/wifi/connect";
+  if (req->method() == HTTP_GET) return url == "/api/status" || url == "/api/wifi/scan";
+  return false;
 }
 
 void sendResult(AsyncWebServerRequest* req, bool ok, const char* err = nullptr) {
@@ -237,14 +261,16 @@ std::string WebServer::buildStatusJson() const {
   const WifiStatus w = deps_.wifi->status();
   JsonObject wifi = doc["wifi"].to<JsonObject>();
   wifi["mode"] = wifiModeName(w.mode);
-  wifi["ssid"] = w.ssid;
+  // The saved home network's name is not shown while the open setup network is
+  // up (this JSON is also pushed to clients on it).
+  wifi["ssid"] = setupNetworkUp() ? std::string() : w.ssid;
   wifi["ip"] = w.ip;
   wifi["rssi"] = w.rssi;
   wifi["bssid"] = w.bssid;
   wifi["channel"] = w.channel;
   wifi["portal"] = w.portal;
   // Lets the UI tell it is being used over the open setup network (setup only).
-  if (w.portal) wifi["ap_ip"] = WiFi.softAPIP().toString().c_str();
+  if (setupNetworkUp()) wifi["ap_ip"] = WiFi.softAPIP().toString().c_str();
   wifi["host"] = deps_.wifi->hostname();
 
   const bool mqttEnabled = deps_.config->mqttEnabled();
@@ -254,6 +280,14 @@ std::string WebServer::buildStatusJson() const {
   mq["connected"] = deps_.mqtt != nullptr && deps_.mqtt->connected();
   mq["error"] = deps_.mqtt != nullptr ? deps_.mqtt->lastError() : std::string();
   doc["fw_build"] = fwBuild();
+  // Why and when the controller last started, and how many pages hold a live
+  // WebSocket: an unexplained reboot, or stale clients eating the heap, show here.
+  JsonObject boot = doc["boot"].to<JsonObject>();
+  const esp_reset_reason_t reason = esp_reset_reason();
+  boot["reason"] = resetReasonName(reason);
+  boot["reason_code"] = static_cast<int>(reason);
+  boot["uptime_s"] = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+  doc["ws_clients"] = ws_.count();
 
   if (deps_.seq != nullptr) {
     const SeqStatus ss = deps_.seq->status();
@@ -299,6 +333,10 @@ void WebServer::handleWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
       client->close();
       return;
     }
+    // A client that stops reading (a dead page, a phone that changed networks)
+    // is dropped once WS_MAX_QUEUED_MESSAGES pile up, instead of holding them
+    // (and that heap) until TCP gives up. A live page simply reconnects.
+    client->setCloseClientOnQueueFull(true);
     // Firmware is built with exceptions: an uncaught bad_alloc anywhere aborts
     // the chip, and a reset mid-fog leaves the machine spraying for a minute.
     try {
@@ -319,7 +357,8 @@ void WebServer::pushStatus(const FoggerSnapshot&) {
 void WebServer::broadcastStatus() {
   lastPushMs_ = millis();  // frame pushes and heartbeats share one cadence
   if (ws_.count() == 0) return;
-  if (!ws_.availableForWriteAll()) return;  // don't queue onto slow clients
+  // No "all clients ready" gate: one stale client would freeze every page, and
+  // it would never fill up enough to be closed (see setCloseClientOnQueueFull).
   // Low on memory: skip this update rather than push the heap to the edge.
   if (ESP.getMaxAllocHeap() < kMinStatusPushBlock) {
     log_w("web: low memory (largest block %u); status push skipped",
@@ -406,9 +445,10 @@ bool WebServer::guardMutation(AsyncWebServerRequest* req) {
     return false;
   }
   // The setup network is open, so anyone nearby can join it while it is up.
-  // Over it, only reads and choosing Wi-Fi are allowed; everything that acts on
-  // the machine or changes the device needs the home network.
-  if (requestOnAp(req) && !allowedOnSetupNetwork(req)) {
+  // Meanwhile only the status read, the Wi-Fi scan and choosing a network are
+  // allowed (setupNetworkUp); everything that acts on the machine or changes
+  // the device needs Wraith on the home network.
+  if (setupNetworkUp() && !allowedOnSetupNetwork(req)) {
     sendJson(req, 403,
              "{\"ok\":false,\"error\":\"setup mode: connect Wraith to your Wi-Fi first\"}");
     return false;
@@ -668,18 +708,20 @@ void WebServer::registerRoutes() {
         // Remote START: needs the user's device password (the first time, the
         // one typed becomes it). See authorizeIgnitionChange.
         const std::string devicePass = json["device_password"] | "";
+        bool choseDevicePassword = false;
         switch (authorizeIgnitionChange(cur.mqtt, next, cur.devicePassword, devicePass)) {
           case IgnitionAuth::kAllowed:
             break;
           case IgnitionAuth::kSetPassword:
+            choseDevicePassword = true;
             if (!deps_.config->setDevicePassword(devicePass)) {
               sendResult(req, false, "could not store the device password");
               return;
             }
             break;
-          case IgnitionAuth::kTooShort:
+          case IgnitionAuth::kBadLength:
             sendResult(req, false,
-                       "choose a device password (8+ characters) to allow remote START");
+                       "choose a device password (8-64 characters) to allow remote START");
             return;
           case IgnitionAuth::kWrongPassword:
             sendResult(req, false, "wrong device password");
@@ -692,6 +734,8 @@ void WebServer::registerRoutes() {
         const bool passwordCleared = typed.empty() && !cur.mqtt.pass.empty() &&
                                      next.pass.empty();
         if (!deps_.config->setMqtt(next)) {
+          // Don't leave a just-chosen device password behind a failed save.
+          if (choseDevicePassword) deps_.config->setDevicePassword("");
           sendResult(req, false, "invalid MQTT settings");
           return;
         }
@@ -824,7 +868,7 @@ void WebServer::registerRoutes() {
           if (!hostAllowed(req->host())) return;
           if (!req->hasHeader("X-Requested-With")) return;
           if (!originMatchesHost(req)) return;
-          if (requestOnAp(req)) return;  // never from the open setup network
+          if (setupNetworkUp()) return;  // never while the open setup network is up
           // Before any flash erase: an upload with no signature would only be
           // refused at the end, so don't let it erase the slot or hold the OTA
           // session; and no OTA while fog runs (flash erases stall the CPU, and
