@@ -102,6 +102,42 @@ MqttSettings base() {
   return s;
 }
 
+void testIgnitionAuth() {
+  using fogger::IgnitionAuth;
+  const MqttSettings off = base();
+  MqttSettings on = base();
+  on.allowRemoteIgnition = true;
+
+  // Remote START staying off (or being turned off) needs nothing.
+  CHECK(fogger::authorizeIgnitionChange(off, off, "", "") == IgnitionAuth::kAllowed);
+  CHECK(fogger::authorizeIgnitionChange(on, off, "hunter22", "") == IgnitionAuth::kAllowed);
+
+  // First time on with no device password stored: the typed one becomes it,
+  // if it is long enough.
+  CHECK(fogger::authorizeIgnitionChange(off, on, "", "hunter22") == IgnitionAuth::kSetPassword);
+  CHECK(fogger::authorizeIgnitionChange(off, on, "", "short") == IgnitionAuth::kTooShort);
+  CHECK(fogger::authorizeIgnitionChange(off, on, "", "") == IgnitionAuth::kTooShort);
+
+  // With one stored, it must match.
+  CHECK(fogger::authorizeIgnitionChange(off, on, "hunter22", "hunter22") ==
+        IgnitionAuth::kAllowed);
+  CHECK(fogger::authorizeIgnitionChange(off, on, "hunter22", "hunter2") ==
+        IgnitionAuth::kWrongPassword);
+
+  // Already on and the same ignition scope (e.g. only the MQTT password changed):
+  // no device password needed. Another broker / topic: needed again.
+  MqttSettings samescope = on;
+  samescope.pass = "new";
+  CHECK(fogger::authorizeIgnitionChange(on, samescope, "hunter22", "") ==
+        IgnitionAuth::kAllowed);
+  MqttSettings moved = on;
+  moved.host = "10.0.0.9";
+  CHECK(fogger::authorizeIgnitionChange(on, moved, "hunter22", "") ==
+        IgnitionAuth::kWrongPassword);
+  CHECK(fogger::authorizeIgnitionChange(on, moved, "hunter22", "hunter22") ==
+        IgnitionAuth::kAllowed);
+}
+
 void testPasswordCarriesOver() {
   const MqttSettings a = base();
   MqttSettings b = base();
@@ -189,6 +225,7 @@ int main() {
   testCaPemShape();
   testBrokerIdentity();
   testPasswordCarriesOver();
+  testIgnitionAuth();
   testCaPemRejectsKeys();
   if (g_failures == 0) {
     std::printf("OK: all MQTT settings tests passed\n");

@@ -56,6 +56,13 @@ bool originMatchesHost(AsyncWebServerRequest* req) {
   return origin == "http://" + host;
 }
 
+// What a client on the open setup network may do: read, and choose Wi-Fi.
+bool allowedOnSetupNetwork(AsyncWebServerRequest* req) {
+  if (req->method() == HTTP_POST) return req->url() == "/api/wifi/connect";
+  // Reads, except the saved settings (home SSID, MQTT broker and user).
+  return req->url() != "/api/config";
+}
+
 void sendResult(AsyncWebServerRequest* req, bool ok, const char* err = nullptr) {
   JsonDocument doc;
   doc["ok"] = ok;
@@ -105,15 +112,6 @@ AsyncCallbackJsonWebHandler* jsonPost(const char* uri, ArJsonRequestHandlerFunct
   return h;
 }
 
-// Constant-time compare (only the length leaks), so response timing can't
-// reveal how much of a guessed secret matched.
-bool secretEquals(const std::string& a, const std::string& b) {
-  if (a.size() != b.size()) return false;
-  uint8_t diff = 0;
-  for (size_t i = 0; i < a.size(); ++i) diff |= static_cast<uint8_t>(a[i] ^ b[i]);
-  return diff == 0;
-}
-
 // A PEM CA certificate that mbedTLS actually parses (the shape check alone would
 // let a garbled paste through, only to fail every TLS handshake later).
 bool caPemParses(const std::string& pem) {
@@ -158,18 +156,6 @@ const char* parseMqttForm(JsonVariant& json, MqttSettings& s, std::string& caIn)
   return nullptr;
 }
 
-// Remote ignition lets whoever can publish our command topic start fog from
-// anywhere. So enabling it, or changing the broker / topic / TLS trust while it
-// is on, needs the per-device setup password (serial / label only, never served
-// by the API). The shared arm window is not enough: any LAN client can open it,
-// turning brief LAN access into a permanent remote ignition channel.
-bool ignitionChangeAuthorized(JsonVariant& json, const MqttSettings& cur,
-                              const MqttSettings& next, const std::string& apPassword) {
-  if (!next.allowRemoteIgnition) return true;
-  if (cur.allowRemoteIgnition && sameIgnitionScope(cur, next)) return true;
-  const std::string devicePass = json["device_password"] | "";
-  return !apPassword.empty() && secretEquals(devicePass, apPassword);
-}
 
 // Keep the stored password when the field is blank, but ONLY for the same host
 // and user and never over a weaker transport (passwordCarriesOver): it is never
@@ -257,6 +243,8 @@ std::string WebServer::buildStatusJson() const {
   wifi["bssid"] = w.bssid;
   wifi["channel"] = w.channel;
   wifi["portal"] = w.portal;
+  // Lets the UI tell it is being used over the open setup network (setup only).
+  if (w.portal) wifi["ap_ip"] = WiFi.softAPIP().toString().c_str();
   wifi["host"] = deps_.wifi->hostname();
 
   const bool mqttEnabled = deps_.config->mqttEnabled();
@@ -415,6 +403,14 @@ bool WebServer::guardMutation(AsyncWebServerRequest* req) {
   // If an Origin is present it must be same-origin with the request's own Host.
   if (!originMatchesHost(req)) {
     sendJson(req, 403, "{\"ok\":false,\"error\":\"bad origin\"}");
+    return false;
+  }
+  // The setup network is open, so anyone nearby can join it while it is up.
+  // Over it, only reads and choosing Wi-Fi are allowed; everything that acts on
+  // the machine or changes the device needs the home network.
+  if (requestOnAp(req) && !allowedOnSetupNetwork(req)) {
+    sendJson(req, 403,
+             "{\"ok\":false,\"error\":\"setup mode: connect Wraith to your Wi-Fi first\"}");
     return false;
   }
   return true;
@@ -646,6 +642,7 @@ void WebServer::registerRoutes() {
     mqtt["has_ca"] = !c.mqtt.caPem.empty();
     mqtt["skip_hostname_check"] = c.mqtt.skipHostnameCheck;
     mqtt["tls_supported"] = kMqttTlsSupported;  // build capability (WRAITH_MQTT_TLS)
+    doc["device_password_set"] = !c.devicePassword.empty();  // never the value
     std::string out;
     serializeJson(doc, out);
     sendJson(req, 200, out);
@@ -668,9 +665,25 @@ void WebServer::registerRoutes() {
           sendResult(req, false, "TLS needs the broker's CA certificate");
           return;
         }
-        if (!ignitionChangeAuthorized(json, cur.mqtt, next, cur.apPassword)) {
-          sendResult(req, false, "device password required to allow remote START");
-          return;
+        // Remote START: needs the user's device password (the first time, the
+        // one typed becomes it). See authorizeIgnitionChange.
+        const std::string devicePass = json["device_password"] | "";
+        switch (authorizeIgnitionChange(cur.mqtt, next, cur.devicePassword, devicePass)) {
+          case IgnitionAuth::kAllowed:
+            break;
+          case IgnitionAuth::kSetPassword:
+            if (!deps_.config->setDevicePassword(devicePass)) {
+              sendResult(req, false, "could not store the device password");
+              return;
+            }
+            break;
+          case IgnitionAuth::kTooShort:
+            sendResult(req, false,
+                       "choose a device password (8+ characters) to allow remote START");
+            return;
+          case IgnitionAuth::kWrongPassword:
+            sendResult(req, false, "wrong device password");
+            return;
         }
         const std::string typed = (json["pass"] | "");
         next.pass = resolveMqttPassword(json, typed, cur.mqtt, next);
@@ -811,6 +824,7 @@ void WebServer::registerRoutes() {
           if (!hostAllowed(req->host())) return;
           if (!req->hasHeader("X-Requested-With")) return;
           if (!originMatchesHost(req)) return;
+          if (requestOnAp(req)) return;  // never from the open setup network
           // Before any flash erase: an upload with no signature would only be
           // refused at the end, so don't let it erase the slot or hold the OTA
           // session; and no OTA while fog runs (flash erases stall the CPU, and

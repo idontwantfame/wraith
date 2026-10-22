@@ -21,7 +21,7 @@ Wi-Fi, timed fog programs, and an optional Home Assistant integration over MQTT.
 - Powers the machine off, as its remote does. Switching it back on needs the
   machine's own button.
 - Signal bars for Wi-Fi and the machine link in the top bar (dBm on hover).
-- Wi-Fi setup through a captive portal on its own WPA2 access point.
+- Wi-Fi setup through a captive portal on its own open setup network.
 - Home Assistant discovery over MQTT. Remote start is off unless you allow it.
 - Signed over-the-air updates with downgrade protection.
 
@@ -62,13 +62,11 @@ pio run -t upload       # build and flash the firmware (web UI included) over US
 
 ## First setup
 
-1. Power the board. With no Wi-Fi saved, it opens an access point named
-   `wraith-xxxxxx`. Its password is generated on first boot and printed on the
-   serial console at every boot: `pio device monitor` (115200 baud) shows
-   `setup AP: SSID '...' password '...'`. Keep it: it is also the **device
-   password**, needed to allow remote control later.
-2. Join the access point. The setup page opens (or browse to `http://192.168.4.1`).
-   Pick your network and enter its password.
+1. Power the board. With no Wi-Fi saved, it opens an open Wi-Fi network named
+   `wraith-xxxxxx`, for setup only.
+2. Join it from a phone. The setup page opens (or browse to `http://192.168.4.1`).
+   Pick your network and enter its password. Over the setup network nothing but
+   Wi-Fi setup works, so a neighbour who joins it can't control the machine.
 3. Open `http://wraith-xxxxxx.local` (or the IP from your router). In
    **Settings → Fog machine**, pick your machine.
 
@@ -83,8 +81,10 @@ pio run -t upload       # build and flash the firmware (web UI included) over US
   update, reboot and factory reset.
 - **Home Assistant**: in Settings, enter your MQTT broker. Entities appear by
   MQTT discovery: Stop and Power off buttons and read-only sensors by default.
-  "Allow remote fog START + density/fan" (needs the device password) adds a fog
-  switch and sliders, for automations you trust. Power off needs no permission:
+  "Allow remote fog START + density/fan" adds a fog switch and sliders, for
+  automations you trust. It needs a device password: you choose it the first
+  time, and it is asked again when the broker changes while remote START is on
+  (a factory reset clears it). Power off needs no permission:
   anything that can publish to the broker can switch the machine off.
 - **Scripts**: see the HTTP API in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#http-api).
   For example, to stop:

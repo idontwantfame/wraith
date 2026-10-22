@@ -124,4 +124,39 @@ inline bool sameIgnitionScope(const MqttSettings& a, const MqttSettings& b) {
          a.caPem == b.caPem && a.skipHostnameCheck == b.skipHostnameCheck;
 }
 
+// Constant-time compare (only the length leaks), so response timing can't
+// reveal how much of a guessed secret matched.
+inline bool secretEquals(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  unsigned char diff = 0;
+  for (size_t i = 0; i < a.size(); ++i) diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+  return diff == 0;
+}
+
+constexpr size_t kMinDevicePasswordLen = 8;
+
+enum class IgnitionAuth : uint8_t {
+  kAllowed,        // nothing to authorise, or the device password matched
+  kSetPassword,    // no device password yet: store the typed one, then allow
+  kTooShort,       // no device password yet, and the typed one is too short
+  kWrongPassword,  // a device password is set and the typed one doesn't match
+};
+
+// Remote START lets whoever can publish our command topic start fog from
+// anywhere. Turning it on, or changing the broker / topic / TLS trust while it
+// is on, needs the device password the user chose. The first time, with none
+// stored yet, the typed password becomes it. (The web UI itself has no login:
+// the LAN is trusted, see docs/ARCHITECTURE.md.)
+inline IgnitionAuth authorizeIgnitionChange(const MqttSettings& cur, const MqttSettings& next,
+                                            const std::string& stored,
+                                            const std::string& typed) {
+  if (!next.allowRemoteIgnition) return IgnitionAuth::kAllowed;
+  if (cur.allowRemoteIgnition && sameIgnitionScope(cur, next)) return IgnitionAuth::kAllowed;
+  if (stored.empty()) {
+    return typed.size() >= kMinDevicePasswordLen ? IgnitionAuth::kSetPassword
+                                                 : IgnitionAuth::kTooShort;
+  }
+  return secretEquals(typed, stored) ? IgnitionAuth::kAllowed : IgnitionAuth::kWrongPassword;
+}
+
 }  // namespace fogger

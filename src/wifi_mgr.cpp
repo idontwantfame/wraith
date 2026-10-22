@@ -2,7 +2,6 @@
 #include "wifi_mgr.h"
 
 #include <ESPmDNS.h>
-#include <esp_random.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -13,14 +12,6 @@ constexpr uint8_t kDnsPort = 53;
 constexpr int kScanRunning = -1;   // WiFi.scanComplete() while in progress
 constexpr int kScanFailed = -2;    // WiFi.scanComplete() after a failed/timed-out scan
 constexpr uint8_t kMaxStaAttempts = 3;  // retry STA this many times before portal
-
-std::string randomHex(size_t n) {
-  static const char kHex[] = "0123456789abcdef";
-  std::string s;
-  s.reserve(n);
-  for (size_t i = 0; i < n; ++i) s += kHex[esp_random() & 0x0F];
-  return s;
-}
 
 SemaphoreHandle_t asMutex(void* h) { return static_cast<SemaphoreHandle_t>(h); }
 
@@ -109,11 +100,10 @@ void WifiManager::startSta(bool keepApDuringConnect) {
 }
 
 void WifiManager::startPortal() {
-  std::string apName, apPass, ssid;
+  std::string apName, ssid;
   {
     Lock lock(cfgMux_);
     apName = cfg_.apName;
-    apPass = cfg_.apPass;
     ssid = cfg_.ssid;
   }
   // AP_STA (not plain AP) so a Wi-Fi scan runs on the station interface and the
@@ -122,14 +112,9 @@ void WifiManager::startPortal() {
   // so a background STA retry that fails does not kick connected clients.
   WiFi.mode(WIFI_AP_STA);
   if (!apUp_) {
-    // Fail closed: never run an open AP. If Config has no usable password (NVS
-    // failure, or a corrupt value below WPA2's 8-char minimum), use a random one
-    // for this boot and print it to serial.
-    if (apPass.size() < 8) {
-      apPass = randomHex(16);
-      log_w("wifi: no usable AP password; random for this boot: %s", apPass.c_str());
-    }
-    WiFi.softAP(apName.c_str(), apPass.c_str());  // WPA2
+    // Open on purpose: anyone nearby can join while it is up, so the web server
+    // allows only reads and choosing Wi-Fi over it (WebServer::guardMutation).
+    WiFi.softAP(apName.c_str());
     dns_.start(kDnsPort, "*", WiFi.softAPIP());  // redirect every lookup to us
     apUp_ = true;
   }

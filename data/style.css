@@ -189,6 +189,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
 @keyframes pulse { 50% { filter: brightness(1.25); } }
 
 .hint { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 10px 2px; }
+.setup-notice { color: var(--text); border-left: 3px solid var(--accent); padding-left: 10px; }
 
 .control-row {
   background: var(--surface);

@@ -1,8 +1,6 @@
 // config.cpp — NVS-backed settings. See config.h.
 #include "config.h"
 
-#include <esp_random.h>
-
 #include <cctype>
 
 #include "freertos/FreeRTOS.h"
@@ -32,13 +30,16 @@ constexpr char kKeyTz[] = "tz";
 constexpr char kKeyTzChosen[] = "tz_set";
 constexpr char kKeyNtp[] = "ntp";
 constexpr char kKeyHost[] = "host";
-constexpr char kKeyApPw[] = "ap_pw";
+constexpr char kKeyDevPw[] = "dev_pw";
+// Retired: the per-device setup-AP password (the setup network is open now).
+// Removed from NVS at boot so the old secret doesn't linger.
+constexpr char kKeyOldApPw[] = "ap_pw";
 constexpr char kKeyMinBuild[] = "min_build";
 
 constexpr char kDefaultTz[] = "GMT0";
 constexpr size_t kMaxSsid = 32;
 constexpr size_t kMaxPass = 63;
-constexpr size_t kApPwLen = 20;  // WPA2 needs >=8; 20 hex chars = ~80 bits
+constexpr size_t kMaxDevicePw = 64;
 
 bool isHexDigit(char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; }
 
@@ -91,14 +92,6 @@ bool mqttSettingsValid(const MqttSettings& m) {
   return true;
 }
 
-std::string randomHex(size_t n) {
-  static const char kHex[] = "0123456789abcdef";
-  std::string s;
-  s.reserve(n);
-  for (size_t i = 0; i < n; ++i) s += kHex[esp_random() & 0x0F];
-  return s;
-}
-
 }  // namespace
 
 bool Config::isValidMac(const std::string& mac) {
@@ -123,8 +116,7 @@ bool Config::begin() {
     return false;
   }
   loadCache();
-  // AP password is minted later (main calls ensureApPassword() after radio init,
-  // when the RNG is well seeded).
+  if (prefs_.isKey(kKeyOldApPw)) prefs_.remove(kKeyOldApPw);  // see kKeyOldApPw
   return true;
 }
 
@@ -143,20 +135,14 @@ std::string Config::timezone() const {
   return cache_.timezone;
 }
 
-void Config::ensureApPassword() {
-  if (!open_) return;
+bool Config::setDevicePassword(const std::string& password) {
+  if (!open_ || password.size() > kMaxDevicePw) return false;
   WriteLock wlock(writeMux_);
-  {
-    Lock lock(mutex_);
-    if (!cache_.apPassword.empty()) return;
-  }
-  const std::string pw = randomHex(kApPwLen);
-  if (prefs_.putString(kKeyApPw, pw.c_str()) == 0) {
-    log_e("config: failed to persist AP password");
-    return;
-  }
+  // putString returns 0 for an empty value (a valid "clear").
+  if (prefs_.putString(kKeyDevPw, password.c_str()) == 0 && !password.empty()) return false;
   Lock lock(mutex_);
-  cache_.apPassword = pw;
+  cache_.devicePassword = password;
+  return true;
 }
 
 void Config::loadCache() {
@@ -190,7 +176,7 @@ void Config::loadCache() {
   d.timezoneChosen = boolean(kKeyTzChosen, d.timezone != kDefaultTz);
   d.ntpServer = str(kKeyNtp, "pool.ntp.org");
   d.hostname = str(kKeyHost, "");
-  d.apPassword = str(kKeyApPw, "");
+  d.devicePassword = str(kKeyDevPw, "");
   d.minBuild = prefs_.isKey(kKeyMinBuild) ? prefs_.getUInt(kKeyMinBuild) : 0;
   Lock lock(mutex_);
   cache_ = d;
@@ -343,32 +329,21 @@ bool Config::setHostname(const std::string& hostname) {
 bool Config::factoryReset() {
   if (!open_) return false;
   WriteLock wlock(writeMux_);
-  // Preserve two device-identity values across the wipe: the per-device AP
-  // password (printed to serial / on a label; regenerating it would lock a user
-  // with no serial access out of re-onboarding) and the OTA anti-downgrade floor
-  // (documented as never lowering).
-  std::string keepAp;
+  // Keep only the OTA anti-downgrade floor (documented as never lowering). The
+  // device password goes too: a reset is how a forgotten one is recovered (it
+  // also turns remote START off, so nothing it guarded stays enabled).
   uint32_t keepMinBuild;
   {
     Lock lock(mutex_);
-    keepAp = cache_.apPassword;
     keepMinBuild = cache_.minBuild;
   }
   const bool ok = prefs_.clear();
   if (keepMinBuild != 0 && prefs_.putUInt(kKeyMinBuild, keepMinBuild) == 0) {
     log_e("config: failed to re-persist the OTA floor after reset");
   }
-  if (!keepAp.empty() && prefs_.putString(kKeyApPw, keepAp.c_str()) == 0) {
-    log_e("config: failed to re-persist AP password after reset");
-  }
   // Reload from NVS so the cache shows exactly what is stored: defaults after a
   // good clear, the surviving values after a partial one.
   loadCache();
-  {
-    Lock lock(mutex_);
-    if (cache_.apPassword.empty()) cache_.apPassword = keepAp;  // keep it usable
-  }
-  if (keepAp.empty()) ensureApPassword();
   ++timeGen_;  // time settings were reset; drop any in-flight IP guess
   return ok;
 }

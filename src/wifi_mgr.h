@@ -38,8 +38,7 @@ struct WifiNetwork {
 struct WifiConfig {
   std::string ssid;                   // saved STA creds; "" => portal on boot
   std::string pass;
-  std::string apName = "Wraith-setup";  // captive-portal SSID; also the auto hostname
-  std::string apPass;                 // "" => open AP
+  std::string apName = "Wraith-setup";  // open captive-portal SSID; also the auto hostname
   std::string hostname = "wraith";    // mDNS name -> http://<hostname>.local
   uint32_t staConnectTimeoutMs = 15000;
   uint32_t staRetryMs = 60000;        // re-attempt STA from portal, if creds set

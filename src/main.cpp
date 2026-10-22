@@ -187,23 +187,19 @@ void setup() {
   // BLE central. Empty target => discover-only until one is chosen in the UI.
   fogger::FoggerBleConfig bcfg;
   bcfg.targetMac = g_config.get().targetMac;
-  // NimBLEDevice::init() brings the radio (and the TRNG) up; the AP password is
-  // minted just below, so warn if BLE init failed (RNG may be weakly seeded).
   if (!g_fogger.begin(bcfg)) {
-    Serial.println(F("WARN: BLE init failed; AP-password entropy may be reduced"));
+    Serial.println(F("WARN: BLE init failed; the machine can't be reached"));
   }
 
-  // Mint the per-device AP password now that the radio is initialised (well-
-  // seeded RNG), then take the config snapshot the rest of setup uses.
-  g_config.ensureApPassword();
   const fogger::ConfigData cfg = g_config.get();
 
-  // Wi-Fi: saved STA creds, else captive portal.
+  // Wi-Fi: saved STA creds, else the captive portal on an open setup network.
+  // Open on purpose (onboarding needs nothing but a phone): over it the web
+  // server allows only reads and choosing Wi-Fi (WebServer::guardMutation).
   fogger::WifiConfig wcfg;
   wcfg.ssid = cfg.wifiSsid;
   wcfg.pass = cfg.wifiPass;
   wcfg.apName = makeDeviceId();      // AP SSID stays unique/stable
-  wcfg.apPass = cfg.apPassword;      // per-device WPA2 password (never open)
   // mDNS hostname: use the configured name if set, else the auto device id.
   wcfg.hostname = cfg.hostname.empty() ? makeDeviceId() : cfg.hostname;
   // Persist STA creds only after they are proven to work (deferred to got-IP).
@@ -212,8 +208,7 @@ void setup() {
         g_config.setWifi(ssid, pass);
       });
   g_wifi.begin(wcfg);
-  Serial.printf("setup AP: SSID '%s'  password '%s'\n", wcfg.apName.c_str(),
-                cfg.apPassword.c_str());
+  Serial.printf("setup AP: SSID '%s' (open, Wi-Fi setup only)\n", wcfg.apName.c_str());
 
   // Wall-clock time via SNTP (syncs once the network is up).
   fogger::TimeConfig tcfg;

@@ -35,9 +35,9 @@ struct ConfigData {
 
   std::string hostname;                    // mDNS/AP name; "" => auto (wraith-xxxxxx)
 
-  // Per-device captive-portal AP password (WPA2). Generated once on first boot
-  // and persisted, so the onboarding AP is never open. Printed to serial.
-  std::string apPassword;
+  // Device password the user chose (Settings > Home Assistant) to allow remote
+  // fog START over MQTT; "" until one is chosen. Cleared by a factory reset.
+  std::string devicePassword;
 
   // Highest firmware build ever run on this device (OTA anti-downgrade floor).
   uint32_t minBuild = 0;
@@ -79,9 +79,10 @@ class Config {
   // write failure.
   bool bumpMinBuild(uint32_t build);
 
-  // Mint + persist the per-device AP password if none is stored yet. Call once
-  // at boot AFTER the radio is initialised, so the RNG is well seeded.
-  void ensureApPassword();
+  // Store the device password (authorises remote START; see
+  // authorizeIgnitionChange in mqtt_settings.h). False if too long or on a
+  // flash error.
+  bool setDevicePassword(const std::string& password);
 
   // Wipe all stored settings (factory reset). Cache resets to defaults.
   bool factoryReset();

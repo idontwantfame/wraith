@@ -22,7 +22,7 @@ optional MQTT / Home Assistant integration over Wi-Fi.
 | `sequencer` | Timed programs (on / off / repeat) with safety caps. |
 | `web_server` | ESPAsyncWebServer: the UI (compiled into the firmware from `data/` by `tools/web_assets.py`, served gzipped), `/api/*`, the `/ws` status push, the captive portal, signed OTA. |
 | `mqtt_ha`, `mqtt_settings.h` | ESP-IDF esp-mqtt client on its own task, Home Assistant discovery, settings validation (host-tested). |
-| `wifi_mgr` | Station mode with a WPA2 setup access point as fallback, captive portal, mDNS. Joins the strongest access point of the network (full scan, sorted by signal); no roaming afterwards. |
+| `wifi_mgr` | Station mode with an open, setup-only access point as fallback, captive portal, mDNS. Joins the strongest access point of the network (full scan, sorted by signal); no roaming afterwards. |
 | `ota`, `ota_signing.h`, `fw_marker.h`, `fw_version` | Signature-checked OTA, the embedded build number, the downgrade floor. |
 | `config` | Settings in NVS behind one writer lock. |
 | `timekeeper` | SNTP, POSIX time zone, optional time-zone guess from the public IP. |
@@ -83,9 +83,19 @@ task; other tasks hand requests over through mutex-guarded or atomic state.
   device IP or `<hostname>.local` (CSRF / DNS-rebinding protection). JSON routes
   are POST-only, and a strict Content-Security-Policy keeps radio-supplied names
   (BLE, SSIDs) from running as code.
-- The setup access point is WPA2 with a per-device password, generated on
-  first boot and printed on the serial console at every boot. It survives a
-  factory reset and doubles as the **device password**.
+- The setup access point is **open**, so onboarding needs only a phone. It is
+  up only while Wraith has no working Wi-Fi (first boot, after Forget Wi-Fi,
+  or when the saved network fails three times). Over it, the server allows
+  only reads and `POST /api/wifi/connect`; everything else (fog, power-off,
+  MQTT, OTA, settings, `/api/config`) is refused. The remaining risk: while it
+  is up, someone nearby can point Wraith at their own network and then use it
+  there.
+- The **device password** authorises remote fog START over MQTT. The user
+  chooses it the first time they allow remote START; it is needed again to
+  change the broker / topic / TLS trust while remote START is on. A factory
+  reset clears it, which is also how a forgotten one is recovered. Anyone on
+  the LAN can still use the web UI (no login), so it guards the broker-wide
+  remote-START channel, not the LAN.
 - OTA images must be signed (RSA-2048 / SHA-256); the signature is checked
   before the new image is made bootable. Each image carries a build number and
   the device refuses anything older than the newest build it has run.
@@ -115,10 +125,10 @@ JSON bodies. `/ws` pushes the same JSON as `/api/status` about once a second.
 | GET | `/api/wifi/scan` | Cached networks (`?force=1` rescans) |
 | POST | `/api/wifi/connect` | `{"ssid", "pass"}` |
 | POST | `/api/wifi/forget` | Forget the saved network and restart into the setup access point; refused while fog runs |
-| POST | `/api/mqtt` | Broker settings; reboots. `device_password` is needed to allow remote control. |
+| POST | `/api/mqtt` | Broker settings; reboots. `device_password` is needed to allow remote control (the first time, it sets it; 8+ characters). |
 | POST | `/api/hostname`, `/api/time`, `/api/time/guess` | mDNS name; time zone and NTP server; time-zone guess |
 | POST | `/api/ota?sig=<url-encoded base64>` | Multipart upload of `firmware.bin` |
-| POST | `/api/reboot`, `/api/factory_reset` | Reboot; erase settings (keeps the device password and the OTA floor) |
+| POST | `/api/reboot`, `/api/factory_reset` | Reboot; erase settings, device password included (keeps the OTA floor) |
 
 Example, stop from a script:
 `curl -X POST -H 'X-Requested-With: fogger' http://wraith.local/api/fog/stop`

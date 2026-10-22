@@ -86,6 +86,9 @@
         <h2>Wi-Fi</h2>
         <button id="btnWifiScan" class="btn btn-ghost">Scan</button>
       </div>
+      <p id="setupNotice" class="hint setup-notice" hidden>Setup mode: choose your Wi-Fi
+        network below. Everything else works once Wraith is on your network; then
+        open <code>http://wraith.local</code> (or the name you gave it).</p>
       <p class="hint">Status: <code id="wifiState">…</code> · <code id="wifiIp">…</code></p>
       <ul id="wifiList" class="list"></ul>
       <div class="form">
@@ -140,8 +143,9 @@
       <p class="hint">Entities auto-register via HA MQTT discovery. Remote start and
         density/fan stay off unless explicitly allowed (STOP always works), so
         automations cannot ignite or retune fog unattended.
-        Allowing it (or changing the broker while it is allowed) needs the device
-        password: the setup-AP password printed on the serial console at boot.</p>
+        Allowing it (or changing the broker while it is allowed) needs a device
+        password: you choose it the first time you allow remote START. A factory
+        reset clears it.</p>
 
       <h2>Device</h2>
       <p class="hint">Reachable at <code id="curHost">…</code></p>

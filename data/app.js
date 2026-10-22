@@ -36,6 +36,10 @@ function toast(msg, isErr = false) {
   toastTimer = setTimeout(() => (t.hidden = true), isErr ? 6000 : 2600); // errors linger
 }
 
+// True while this page is used over Wraith's open setup network, where the
+// device allows only choosing Wi-Fi (set from the status in renderStatus).
+let setupMode = false;
+
 // --- tabs --------------------------------------------------------------------
 function activateTab(name) {
   document.querySelectorAll(".tab").forEach((b) =>
@@ -45,6 +49,10 @@ function activateTab(name) {
   const panel = $("tab-" + name);
   if (panel) panel.classList.add("active");
   if (name === "settings") {
+    if (setupMode) {
+      scanWifi();  // the saved settings and the rest are refused here anyway
+      return;
+    }
     // Settings first, then the lists: a Wi-Fi scan can stall the device's HTTP
     // replies for seconds, and the form must be filled before anything can be
     // saved from it. The machine list is a cheap read of the BLE scan cache.
@@ -236,6 +244,8 @@ function renderStatus(d) {
     $("wifiState").textContent = w.mode + (w.portal ? " (portal)" : "") + ap;
     $("wifiIp").textContent = d.wifi.ip || "…";
     if (d.wifi.host) $("curHost").textContent = "http://" + d.wifi.host + ".local";
+    setupMode = Boolean(w.ap_ip) && location.hostname === w.ap_ip;
+    $("setupNotice").hidden = !setupMode;
   }
 
   if (d.program) {
@@ -553,7 +563,7 @@ $("btnWifiConnect").addEventListener("click", async () => {
 $("btnWifiForget").addEventListener("click", async () => {
   if (!confirm(
       "Forget the saved Wi-Fi and restart in setup mode?\n\n" +
-      "Then join the wraith-… network (device password) to choose a network again. " +
+      "Then join the open wraith-… network to choose a network again. " +
       "Other settings are kept.")) return;
   const r = await api("/api/wifi/forget", "POST");
   toast(r.ok ? "Restarting in setup mode: join the wraith-… network" : "Failed: " + (r.error || "?"), !r.ok);
@@ -606,6 +616,9 @@ async function loadConfig() {
   $("mqttUser").value = c.mqtt.user || "";
   $("mqttTopic").value = c.mqtt.base_topic || "wraith";
   $("mqttIgnite").checked = c.mqtt.allow_remote_ignition;
+  $("devicePass").placeholder = c.device_password_set
+    ? "Device password (to allow remote START)"
+    : "Choose a device password (8+ characters) to allow remote START";
   if (!c.mqtt.tls_supported) {
     // This firmware build has no TLS (not enough RAM on this board): don't offer it.
     [...$("mqttTransport").options]
@@ -678,7 +691,7 @@ $("btnMqttSave").addEventListener("click", async () => {
     clear_ca: $("mqttClearCa").checked,
     skip_hostname_check: $("mqttSkipCn").checked,
     // Only checked when allowing remote START (or changing broker while it is
-    // allowed): the per-device setup password from the serial console.
+    // allowed). With none set yet, the one typed here becomes the device password.
     device_password: $("devicePass").value,
   };
   const r = await api("/api/mqtt", "POST", body);
