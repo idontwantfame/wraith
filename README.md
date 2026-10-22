@@ -41,11 +41,12 @@ Wi-Fi, timed fog programs, and an optional Home Assistant integration over MQTT.
 
 ### From a release
 
-Each [release](../../releases) has a complete image. Flash it over USB with
+Each [release](../../releases) has a complete image. File names carry the chip
+they are built for (`esp32c3`). Flash it over USB with
 [esptool](https://docs.espressif.com/projects/esptool/) (`pip install esptool`):
 
 ```
-esptool --chip esp32c3 write-flash 0x0 wraith-<version>-factory.bin
+esptool --chip esp32c3 write-flash 0x0 wraith-<version>-esp32c3-factory.bin
 ```
 
 This erases any saved settings. To update a running device, use the Wi-Fi
@@ -97,7 +98,7 @@ an older build than it has run. The web UI is built into the firmware, so an
 update brings both.
 
 - **A release**: in Settings → Firmware update, pick
-  `wraith-<version>-firmware.bin` and its `.sig`.
+  `wraith-<version>-esp32c3-firmware.bin` and its `.sig`.
 - **From source**: `pio run -t ota` builds, signs and uploads to `wraith.local`
   (set `custom_ota_host` in `platformio.ini`, or run with
   `WRAITH_HOST=<ip or name.local>`). Signing needs the private key at

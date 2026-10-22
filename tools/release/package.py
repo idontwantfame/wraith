@@ -5,12 +5,13 @@ Run from the repo root after `pio run`:
 
     python3 tools/release/package.py v1.2.0            # -> release/
 
-Writes release/assets/:
-  wraith-<version>-firmware.bin  app image (web UI included), for updates over
-                                 Wi-Fi (gets a .sig)
-  wraith-<version>-factory.bin   complete image for a first install at offset 0
-                                 (bootloader, partition table, app)
-  ota_public_key.pem             the key the firmware trusts, to verify .sig files
+Writes release/assets/ (file names carry the chip, e.g. esp32c3):
+  wraith-<version>-<chip>-firmware.bin  app image (web UI included), for
+                                        updates over Wi-Fi (gets a .sig)
+  wraith-<version>-<chip>-factory.bin   complete image for a first install at
+                                        offset 0 (bootloader, partitions, app)
+  ota_public_key.pem                    the key the firmware trusts, to verify
+                                        .sig files
 and release/notes.md (build number, files, install commands). Signing happens
 later, in the release job that holds the private key.
 """
@@ -25,7 +26,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from signing_key import public_key_pem  # noqa: E402 (sibling module)
 
-BUILD_DIR = Path(".pio/build/esp32c3")
+CHIP = "esp32c3"  # the PlatformIO env and esptool's --chip name
+CHIP_NAME = "ESP32-C3"
+BUILD_DIR = Path(".pio/build") / CHIP
 MARKER_MAGIC = b"WRAITHFW"  # fw_marker.h: magic + uint32 build, little-endian
 VERSION_PATTERN = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$")
 
@@ -41,10 +44,15 @@ def read_build(firmware: bytes) -> int:
     return int.from_bytes(firmware[start:start + 4], "little")
 
 
+def asset_prefix(version: str) -> str:
+    return f"wraith-{version}-{CHIP}"
+
+
 def notes(version: str, build: int) -> str:
-    name = f"wraith-{version}"
-    return f"""Build number **{build}** (the UTC build time, `yymmddHHMM`). The web UI is
-built into the firmware, so one image updates both.
+    name = asset_prefix(version)
+    return f"""For **{CHIP_NAME}** boards with 4 MB flash. Build number **{build}** (the UTC
+build time, `yymmddHHMM`). The web UI is built into the firmware, so one image
+updates both.
 
 | File | Use |
 |---|---|
@@ -56,7 +64,7 @@ built into the firmware, so one image updates both.
 First install (esptool 5; with esptool 4 use `write_flash`):
 
 ```
-esptool --chip esp32c3 write-flash 0x0 {name}-factory.bin
+esptool --chip {CHIP} write-flash 0x0 {name}-factory.bin
 ```
 
 Verify a download:
@@ -83,7 +91,7 @@ def main() -> None:
         fail(f"missing {', '.join(missing)}; run `pio run` first")
 
     build = read_build(inputs["firmware.bin"].read_bytes())
-    name = f"wraith-{args.version}"
+    name = asset_prefix(args.version)
 
     assets = args.out / "assets"
     shutil.rmtree(args.out, ignore_errors=True)
