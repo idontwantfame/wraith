@@ -198,17 +198,14 @@ Passed in attended tests on 2026-10-22 (builds 2610212053 to 2610221112):
   density / fan extremes (8000 / 35 and 40000 / 100).
 - MQTT over WebSocket against a real broker listener (state, HA buttons).
 - Phone onboarding through the open setup network: the sign-in page opened by
-  itself (one phone).
+  itself (one phone). Repeated on build 2610221112: about 52 KB free in setup
+  mode (MQTT paused), and no restart after joining.
 - Memory: two browsers force-reloading at once (lowest 280 bytes, no restart);
   a reboot with a page open (no retry storm); heap flat over 5-minute phases
   with nothing connected, polled once a second, and one page open.
 
 Still to verify:
 
-- Onboarding again on build 2610221112 or later (setup-mode fixes: MQTT
-  paused). An earlier run saw DHCP stop answering after a long setup session
-  and one unexplained restart right after joining; `/api/status` now reports
-  the reset reason.
 - The 10-minute fallback window (needs the router unreachable).
 - How visibly the output differs across density / fan levels; how long a full
   charge lasts.
