@@ -69,8 +69,8 @@ task; other tasks hand requests over through mutex-guarded or atomic state.
   back off. It ends any program first. Until the link drops (at most 15 s), fog
   start, density and fan are refused, and a program started meanwhile never
   fogs (it ends as "machine did not start"). Wraith never sends `03 00`, which
-  the remote uses after the machine's own power control, so that control
-  should keep working (untested).
+  the remote uses after the machine's own power control, so that control keeps
+  working (verified 2026-10-22).
 - **If the controller dies, the machine keeps fogging for about a minute.** In
   attended tests (2026-10-21), pulling the ESP32's power mid-fog left the
   machine spraying for roughly 60 s before it stopped by itself. Nothing on the
@@ -96,7 +96,9 @@ task; other tasks hand requests over through mutex-guarded or atomic state.
   everything else (fog, power-off, MQTT, OTA, settings) is refused. Residual
   risks: the home Wi-Fi password typed during setup crosses the open network
   unencrypted, and someone nearby while it is up can point Wraith at their own
-  network and then use it there.
+  network and then use it there. WPA3 "Enhanced Open" (encrypted, no password)
+  would close the first; ESP-IDF supports it on a C3 access point only from
+  6.1 (Arduino 4.0), so revisit once that is stable.
 - The **device password** authorises remote fog START over MQTT. The user
   chooses it the first time they allow remote START; it is needed again to
   change the broker / topic / TLS trust while remote START is on. A factory
@@ -176,15 +178,41 @@ Disconnect while fogging (stop sent first); web / API stop during a program
 (later pulses cancelled); removing the machine's batteries mid-program (program
 aborted, stop on reconnect, no restart).
 
-Still to verify, with the machine on and someone watching it:
+Passed in attended tests on 2026-10-22 (builds 2610212053 to 2610221112):
 
-- The machine's own button during a program now ends the program (fixed after
-  the 2026-10-21 test showed the next pulse restarting fog).
-- Serial `stop` and `status` over USB (the console moved to the native USB
-  port; before, it listened on UART0 pins and never answered over USB).
-- Power off from Wraith: the machine switches off within ~10 s and the link
-  drops; after a power-on with its own button, Wraith reconnects and fog
-  starts normally.
+- The machine's own button during a program ends it ("machine stopped", no
+  next pulse): the 2026-10-21 bug is fixed.
+- Power off from the web UI, the serial console and Home Assistant, idle and
+  mid-program (fog stops at once, program ends "powered off", the machine is
+  dark and the link down 9-11 s later, no reconnect). After a power-on with
+  its own button, Wraith reconnects within seconds and fogs normally.
 - The machine's own power control with Wraith connected switches it off.
-- Phone onboarding through the captive portal on iOS and Android.
-- MQTT over WebSocket against a real broker listener.
+- Serial `status` and `stop` over USB, also mid-program, with no board reset
+  (DTR / RTS on; with them off every open reset the board).
+- Machine reports: re-seating the tank gives `0x0200` (amber banner); with the
+  tank out a start is refused with `0x0008` (red banner, no fog); a flat pack
+  gave `0x0001`, then the machine switched itself off.
+- A continuous run of 3 min 41 s, steady, stopped promptly. The pack reading
+  34% at the start was then flat.
+- MQTT over WebSocket against a real broker listener (state, HA buttons).
+- Phone onboarding through the open setup network: the sign-in page opened by
+  itself (one phone).
+- Memory: two browsers force-reloading at once (lowest 280 bytes, no restart);
+  a reboot with a page open (no retry storm); heap flat over 5-minute phases
+  with nothing connected, polled once a second, and one page open.
+
+Still to verify:
+
+- Onboarding again on build 2610221112 or later (setup-mode fixes: MQTT
+  paused). An earlier run saw DHCP stop answering after a long setup session
+  and one unexplained restart right after joining; `/api/status` now reports
+  the reset reason.
+- The 10-minute fallback window (needs the router unreachable).
+- Fog while charging; output at each density / fan level; how long a full
+  charge lasts.
+- Onboarding on both iOS and Android.
+
+Known limits: a page load costs 10-15 KB of heap for a moment, so several
+devices loading at once can push the free heap down to a few hundred bytes
+(guarded, no crash). Cheaper reloads (ETag) and a single-file UI would reduce
+it.

@@ -65,14 +65,17 @@ what has been observed:
   treat a power-off as one-way: the machine's own button brings it back.
 
 Wraith sends the 7-byte form as one Write Request (the remote uses Write
-Command; the machine accepts both). It never sends `03 00`, so the machine's own
-power control should work while Wraith is connected; that is not yet tested.
+Command; the machine accepts both). Verified on hardware (2026-10-22): from the
+web UI, the serial console and Home Assistant, idle and in the middle of a
+program, the machine went dark and the link dropped 9-11 s later, with no
+reconnect afterwards. Wraith never sends `03 00`, so the machine's own power
+control keeps working while Wraith is connected (also verified 2026-10-22).
 
 Seen from the remote, or present in the machine's firmware, but **not**
 controls to use:
 
 - `08 <byte> 00`: the remote sends it about every 0.5 s; meaning not decoded.
-  Not needed: fog runs of 30 s and 90 s without it behaved normally.
+  Not needed: fog runs of 30 s, 90 s and 3 min 41 s without it behaved normally.
 - `01`, `06`: untested mode / timing fields.
 - `07 <u16>`: overwrites the machine report (below); not a control, and never
   to be used to clear a report.
@@ -94,7 +97,7 @@ reassemble from the byte stream and resync on `aa 55 14`
 | 8 | Fan |
 | 9 | Second fan parameter (100) |
 | 10..11 | Machine report, u16 big-endian; 0 = nothing to report (below) |
-| 12, 13 | Battery A, B: the machine's estimated percent (which is left / right is unconfirmed) |
+| 12, 13 | Battery A, B: the machine's estimated percent (which is left / right is unconfirmed). Unreliable near empty: a pack reading 34% was flat after under 4 min of fog. |
 | 14 | Charger connected (0 / 1) |
 | 15 | Charge complete (0 / 1); can stay 1 after the charger is unplugged |
 | 16 | **Output active**: 1 while fogging. This is the real fog indicator; output switches within ~0.65 s of a command. |
@@ -105,19 +108,19 @@ reassemble from the byte stream and resync on `aa 55 14`
 A latched **last-event** word, not live state: the machine copies each batch of
 events here and never clears it (only a later event, or command `07`, changes
 it). Bits can combine. Decoded from the machine firmware (ULFACE
-`artifacts/ble/report-word-analysis-2026-10-21.md`); only `0x0200` has been
-matched to a physical event so far.
+`artifacts/ble/report-word-analysis-2026-10-21.md`); `0x0001`, `0x0008` and
+`0x0200` have been matched to physical events (2026-10-22).
 
 | Bit | Meaning | Effect on fog | Confidence |
 |---|---|---|---|
-| `0x0001` | Low battery | Refuses / stops | high |
+| `0x0001` | Low battery. Seen at the end of a 3 min 41 s run on a pack that read 34% at the start: it read 0% and the machine switched itself off ~16 s later. | Refuses / stops | high (seen) |
 | `0x0002` | Battery reading invalid (cell missing?) | Refuses | medium |
 | `0x0004` | Atomizer short (< ~0.22 Ω) or over-current | Refuses / stops | high |
-| `0x0008` | Oil tank missing (open load) | Refuses / stops | medium-high |
+| `0x0008` | Oil tank missing (open load). Seen: with the tank out, a start was refused (no fog) and reported this. | Refuses / stops | high (seen) |
 | `0x0020` | Over-temperature | Refuses / stops | medium-high |
 | `0x0080` | Battery imbalance (> 499 mV between cells) | Refuses | high |
 | `0x0100` | Dry burn (coil overheating, oil likely empty) | Stops | medium |
-| `0x0200` | **Oil tank connected and recognised.** Seen after reinserting the batteries, while the original remote showed "oil tank connected". | None: informational | high |
+| `0x0200` | **Oil tank connected and recognised.** Seen after reinserting the batteries, while the original remote showed "oil tank connected", and after re-seating the tank. | None: informational | high (seen) |
 | `0x0400` | Oil tank not recognised (load outside ~0.29-0.40 Ω) | Refuses | high (logic) |
 | others | No setter in this firmware | — | — |
 
@@ -141,10 +144,9 @@ still holds.
 
 ## Not yet verified
 
-- Runs longer than 90 s (no keepalive was needed up to then).
-- Power-off sent by Wraith (only the remote's has been captured).
-- The machine's own power control while Wraith is connected (Wraith never sends
-  the remote's `03 00`, so it should switch the machine off).
+- Runs longer than 3 min 41 s, and how long a full charge lasts (no keepalive
+  was needed up to then).
+- Fog while the charger is connected.
 - The actual output at each density / fan level.
-- The machine report bits other than `0x0200` against physical events (their
-  meanings come from static analysis).
+- The machine report bits other than `0x0001`, `0x0008` and `0x0200` against
+  physical events (their meanings come from static analysis).
