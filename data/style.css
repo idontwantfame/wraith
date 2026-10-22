@@ -209,6 +209,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 
 .row-between { display: flex; align-items: center; justify-content: space-between; }
+/* A section heading with a button (e.g. "Fog machine" + Rescan) is taller than
+   a plain h2: keep it clear of the section above. */
+.panel > .row-between:not(:first-child) { margin-top: 18px; }
 h2 { font-size: 16px; margin: 8px 0; }
 
 .list { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
